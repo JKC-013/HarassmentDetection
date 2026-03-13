@@ -7,6 +7,21 @@ from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, RTCConfigura
 # MediaPipe Tasks API
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+
+# FIX: Monkeypatch MediaPipe's ctypes error for Python 3.14
+import ctypes
+try:
+    from mediapipe.tasks.python.core import mediapipe_c_bindings
+    if not hasattr(mediapipe_c_bindings, 'free'):
+        # On Linux (Render), 'free' is in libc.so.6
+        try:
+            libc = ctypes.CDLL("libc.so.6")
+            mediapipe_c_bindings.free = libc.free
+        except:
+            pass
+except:
+    pass
+
 PoseLandmarker = vision.PoseLandmarker
 PoseLandmarkerOptions = vision.PoseLandmarkerOptions
 RunningMode = vision.RunningMode
