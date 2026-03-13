@@ -2,7 +2,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, RTCConfiguration
+from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
 
 # MediaPipe Tasks API
 from mediapipe.tasks import python
@@ -108,7 +108,7 @@ st.sidebar.write(f"Model File Found: {'✅' if task_file_exists else '❌'}")
 if not task_file_exists:
     st.error("CRITICAL: `pose_landmarker.task` is missing from the repository root. Please upload it to GitHub!")
 
-class PoseTransformer(VideoTransformerBase):
+class PoseTransformer(VideoProcessorBase):
     def __init__(self):
         try:
             # Initialize Pose Landmarker
@@ -132,7 +132,7 @@ class PoseTransformer(VideoTransformerBase):
             self.init_success = False
             self.error_msg = str(e)
 
-    def transform(self, frame):
+    def recv(self, frame):
         if not self.init_success:
             return frame.to_ndarray(format="bgr24") # Fallback to raw video
 
@@ -206,9 +206,9 @@ class PoseTransformer(VideoTransformerBase):
             return frame.to_ndarray(format="bgr24")
 
 webrtc_streamer(
-    key="pose-detection",
+    key="pose-detection-v2", # Changed key to force fresh initialization
     video_processor_factory=PoseTransformer,
     rtc_configuration=RTC_CONFIGURATION,
     media_stream_constraints={"video": True, "audio": False},
-    async_processing=True, # Improved performance for cloud
+    async_processing=False, # Disabled to avoid race conditions on shutdown
 )
