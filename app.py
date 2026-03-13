@@ -5,14 +5,16 @@ import streamlit as st
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
 import os
 import sys
-import ctypes
 import threading
 import av
 
-# MediaPipe Tasks API
+# MediaPipe Solutions (Used for hand tracking for reliability on Python 3.11)
+mp_hands = mp.solutions.hands
+mp_pose_solutions = mp.solutions.pose
+
+# MediaPipe Tasks API (Used for multi-person pose)
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
-
 PoseLandmarker = vision.PoseLandmarker
 PoseLandmarkerOptions = vision.PoseLandmarkerOptions
 RunningMode = vision.RunningMode
@@ -22,75 +24,68 @@ st.set_page_config(page_title="Multi-Person Pose Detection", layout="wide")
 
 st.title("🏃 Multi-Person Pose Detection")
 
-# --- SETTINGS ---
-st.sidebar.subheader("App Settings")
-debug_mode = st.sidebar.checkbox("Debug mode (Raw Camera)", value=False, help="Disable AI to test if the camera connection works at all.")
-
-# --- CACHED MODEL ---
+# --- CACHED MODELS ---
 @st.cache_resource
-def get_landmarker():
+def get_detectors():
+    # 1. Pose Landmarker
     if not os.path.exists('pose_landmarker.task'):
-        return None
+        pose_model = None
+    else:
+        try:
+            with open('pose_landmarker.task', 'rb') as f:
+                model_data = f.read()
+            base_options = python.BaseOptions(model_asset_buffer=model_data)
+            options = PoseLandmarkerOptions(
+                base_options=base_options,
+                running_mode=RunningMode.IMAGE,
+                num_poses=4,
+                min_pose_detection_confidence=0.5,
+                min_pose_presence_confidence=0.5
+            )
+            pose_model = PoseLandmarker.create_from_options(options)
+        except:
+            pose_model = None
+            
+    # 2. Hand Detector
     try:
-        with open('pose_landmarker.task', 'rb') as f:
-            model_data = f.read()
-        base_options = python.BaseOptions(model_asset_buffer=model_data)
-        options = PoseLandmarkerOptions(
-            base_options=base_options,
-            running_mode=RunningMode.IMAGE,
-            num_poses=4,
-            min_pose_detection_confidence=0.5,
-            min_pose_presence_confidence=0.5
+        hands_model = mp_hands.Hands(
+            model_complexity=1,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+            max_num_hands=4
         )
-        return PoseLandmarker.create_from_options(options)
-    except Exception as e:
-        return None
+    except:
+        hands_model = None
+        
+    return pose_model, hands_model
 
-LANDMARKER = get_landmarker()
-LANDMARKER_LOCK = threading.Lock()
+POSE_LANDMARKER, HANDS_DETECTOR = get_detectors()
+DETECTOR_LOCK = threading.Lock()
 
 st.sidebar.subheader("System Diagnostics")
 st.sidebar.write(f"Python: {sys.version.split()[0]}")
-st.sidebar.write(f"Model: {'✅ Ready' if LANDMARKER else '❌ Error'}")
+st.sidebar.write(f"Pose Model: {'✅' if POSE_LANDMARKER else '❌'}")
+st.sidebar.write(f"Hand Model: {'✅' if HANDS_DETECTOR else '❌'}")
+
+debug_mode = st.sidebar.checkbox("Debug mode (Raw Camera)", value=False)
 
 st.markdown("""
 ### Instructions:
 1. **Required**: At least 2 people for this experiment.
-2. Press **"Start"**.
-3. If the screen stays black, try turning on **"Debug mode"** in the sidebar.
-4. Alerts will show when one person's hand touches another person's face/chest.
+2. Pose connections and **21 hand points** will be visualized.
+3. Alerts show when a hand touches another person's Face or Chest.
 """)
 
 RTC_CONFIGURATION = RTCConfiguration(
-    {
-        "iceServers": [
-            {"urls": ["stun:stun.l.google.com:19302"]},
-            {"urls": ["stun:stun1.l.google.com:19302"]},
-            {"urls": ["stun:stun2.l.google.com:19302"]},
-            {"urls": ["stun:stun.services.mozilla.com"]},
-        ]
-    }
+    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}, {"urls": ["stun:stun1.l.google.com:19302"]}]}
 )
 
-POSE_CONNECTIONS = [
-    (0, 1), (1, 2), (2, 3), (3, 7), (0, 4), (4, 5), (5, 6), (6, 8), (9, 10),
-    (11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23), (12, 24), (23, 24),
-    (23, 25), (25, 27), (24, 26), (26, 28), (15, 17), (15, 19), (15, 21), (17, 19),
-    (16, 18), (16, 20), (16, 22), (18, 20)
-]
+def get_distance(p1, p2):
+    return np.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
 
-def get_face_bbox_from_pose(landmarks):
-    face_indices = [0, 1, 2, 3, 4, 5, 6, 7, 8]
-    xs = [landmarks[i].x for i in face_indices]
-    ys = [landmarks[i].y for i in face_indices]
-    w_box, h_box = max(xs) - min(xs), max(ys) - min(ys)
-    return (max(0, min(xs) - w_box*0.1), max(0, min(ys) - h_box*0.1), min(1, w_box*1.2), min(1, h_box*1.2))
-
-def get_chest_bbox_from_pose(landmarks):
-    xmin = min(landmarks[11].x, landmarks[12].x, landmarks[23].x, landmarks[24].x)
-    xmax = max(landmarks[11].x, landmarks[12].x, landmarks[23].x, landmarks[24].x)
-    ymin, ymax = min(landmarks[11].y, landmarks[12].y), max(landmarks[23].y, landmarks[24].y)
-    return (xmin, ymin, xmax - xmin, (ymax - ymin) * 0.5)
+def is_point_in_rect(point, rect):
+    rx, ry, rw, rh = rect
+    return rx <= point[0] <= rx + rw and ry <= point[1] <= ry + rh
 
 class PoseTransformer(VideoProcessorBase):
     def __init__(self):
@@ -98,60 +93,83 @@ class PoseTransformer(VideoProcessorBase):
 
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
-        
-        # DEBUG MODE: Skip AI processing
-        if st.session_state.get('debug_mode_active', False):
+        if debug_mode or not POSE_LANDMARKER:
             return av.VideoFrame.from_ndarray(img, format="bgr24")
 
         try:
             h, w, _ = img.shape
-            # Optimization: Resize for faster AI processing on Render
-            process_w = 480
-            process_h = int(h * (process_w / w))
-            small_img = cv2.resize(img, (process_w, process_h))
-            rgb_small = cv2.cvtColor(small_img, cv2.COLOR_BGR2RGB)
-            mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_small)
+            rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_img)
             
-            with LANDMARKER_LOCK:
-                res = LANDMARKER.detect(mp_img) if LANDMARKER else None
+            with DETECTOR_LOCK:
+                pose_res = POSE_LANDMARKER.detect(mp_img)
+                hand_res = HANDS_DETECTOR.process(rgb_img) if HANDS_DETECTOR else None
 
-            if res and res.pose_landmarks:
-                for i, lms in enumerate(res.pose_landmarks):
+            bodies = []
+            if pose_res and pose_res.pose_landmarks:
+                for i, lms in enumerate(pose_res.pose_landmarks):
                     color = self.colors[i % len(self.colors)]
-                    face = get_face_bbox_from_pose(lms)
-                    chest = get_chest_bbox_from_pose(lms)
                     
-                    # Draw Poses (scaled back to original size)
-                    for s, e in POSE_CONNECTIONS:
-                        if lms[s].presence > 0.5 and lms[e].presence > 0.5:
-                            cv2.line(img, (int(lms[s].x * w), int(lms[s].y * h)), (int(lms[e].x * w), int(lms[e].y * h)), color, 2)
+                    # Face Bbox
+                    face_pts = [lms[j] for j in range(9)]
+                    fx_s, fy_s = [p.x for p in face_pts], [p.y for p in face_pts]
+                    fw_raw, fh_raw = max(fx_s)-min(fx_s), max(fy_s)-min(fy_s)
+                    face_bbox = (min(fx_s)-fw_raw*0.2, min(fy_s)-fh_raw*0.6, fw_raw*1.4, fh_raw*2.2)
                     
-                    fx, fy, fw, fh = int(face[0]*w), int(face[1]*h), int(face[2]*w), int(face[3]*h)
-                    cv2.rectangle(img, (fx, fy), (fx+fw, fy+fh), color, 2)
+                    # Chest Bbox
+                    cx_min = min(lms[11].x, lms[12].x, lms[23].x, lms[24].x)
+                    cx_max = max(lms[11].x, lms[12].x, lms[23].x, lms[24].x)
+                    cy_min = min(lms[11].y, lms[12].y)
+                    cy_max = max(lms[23].y, lms[24].y)
+                    chest_bbox = (cx_min, cy_min, cx_max-cx_min, (cy_max-cy_min)*0.6)
                     
-                    # Touch checks
-                    hands = [(lms[j].x, lms[j].y) for j in [19, 20, 17, 18]]
-                    for pt in hands:
-                        cv2.circle(img, (int(pt[0]*w), int(pt[1]*h)), 6, color, -1)
+                    bodies.append({'id': i, 'face': face_bbox, 'chest': chest_bbox, 'wrists': [(lms[15].x, lms[15].y), (lms[16].x, lms[16].y)], 'color': color})
+                    
+                    # Draw Pose
+                    for conn in mp_pose_solutions.POSE_CONNECTIONS:
+                        if lms[conn[0]].presence > 0.5 and lms[conn[1]].presence > 0.5:
+                            cv2.line(img, (int(lms[conn[0]].x*w), int(lms[conn[0]].y*h)), (int(lms[conn[1]].x*w), int(lms[conn[1]].y*h)), color, 2)
+                    
+                    fox, foy, fow, foh = int(face_bbox[0]*w), int(face_bbox[1]*h), int(face_bbox[2]*w), int(face_bbox[3]*h)
+                    cv2.rectangle(img, (fox, foy), (fox+fow, foy+foh), color, 2)
+                    cv2.putText(img, f"P{i}", (fox, foy-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
-            if LANDMARKER is None:
-                cv2.putText(img, "MODEL LOAD ERROR", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            alerts = []
+            if hand_res and hand_res.multi_hand_landmarks:
+                for hand_lms in hand_res.multi_hand_landmarks:
+                    # Association
+                    h_wrist = (hand_lms.landmark[0].x, hand_lms.landmark[0].y)
+                    min_d, owner_id = 0.2, -1
+                    for b in bodies:
+                        for b_wrist in b['wrists']:
+                            d = get_distance(h_wrist, b_wrist)
+                            if d < min_d: min_d, owner_id = d, b['id']
+                    
+                    h_color = bodies[owner_id]['color'] if owner_id != -1 else (128, 128, 128)
+                    for lm in hand_lms.landmark:
+                        cv2.circle(img, (int(lm.x*w), int(lm.y*h)), 4, h_color, -1)
+                        if owner_id != -1:
+                            for other in bodies:
+                                if owner_id != other['id']:
+                                    if is_point_in_rect((lm.x, lm.y), other['face']): alerts.append((other['id'], owner_id, "Face"))
+                                    elif is_point_in_rect((lm.x, lm.y), other['chest']): alerts.append((other['id'], owner_id, "Chest"))
+
+            if alerts:
+                unique_alerts = set(alerts)
+                alert_msg = "ALERTS: " + ", ".join([f"P{b} touch P{a}'s {area}" for a, b, area in unique_alerts])
+                cv2.putText(img, alert_msg, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                overlay = img.copy()
+                cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 255), -1)
+                cv2.addWeighted(overlay, 0.15, img, 0.85, 0, img)
 
         except Exception as e:
             pass
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-# Update debug mode state for the thread
-if debug_mode:
-    st.session_state.debug_mode_active = True
-else:
-    st.session_state.debug_mode_active = False
-
 webrtc_streamer(
-    key="pose-detection-debug-v6",
+    key="pose-detection-v7",
     video_processor_factory=PoseTransformer,
     rtc_configuration=RTC_CONFIGURATION,
     media_stream_constraints={"video": True, "audio": False},
-    async_processing=True,
 )
