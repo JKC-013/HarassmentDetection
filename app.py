@@ -71,9 +71,19 @@ RTC_CONFIGURATION = RTCConfiguration(
             {"urls": ["stun:stun.l.google.com:19302"]},
             {"urls": ["stun:stun1.l.google.com:19302"]},
             {"urls": ["stun:stun2.l.google.com:19302"]},
+            {"urls": ["stun:stun3.l.google.com:19302"]},
+            {"urls": ["stun:stun4.l.google.com:19302"]},
+            {"urls": ["stun:stun.services.mozilla.com"]},
+            {"urls": ["stun:stun.ekiga.net"]},
         ]
     }
 )
+
+# Connection Status in Sidebar
+if "ice_state" not in st.session_state:
+    st.session_state.ice_state = "Not Started"
+
+st.sidebar.write(f"WebRTC State: {st.session_state.ice_state}")
 
 POSE_CONNECTIONS = [
     (0, 1), (1, 2), (2, 3), (3, 7), (0, 4), (4, 5), (5, 6), (6, 8), (9, 10),
@@ -158,10 +168,14 @@ class PoseTransformer(VideoProcessorBase):
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
+def on_ice_connection_state_change(state):
+    st.session_state.ice_state = str(state)
+
 webrtc_streamer(
-    key="pose-detection-final-v4",
+    key="pose-detection-final-v5",
     video_processor_factory=PoseTransformer,
     rtc_configuration=RTC_CONFIGURATION,
     media_stream_constraints={"video": True, "audio": False},
     async_processing=False,
+    on_ice_connection_state_change=on_ice_connection_state_change,
 )
