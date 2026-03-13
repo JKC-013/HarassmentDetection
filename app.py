@@ -22,10 +22,11 @@ st.set_page_config(page_title="Multi-Person Pose Detection", layout="wide")
 
 st.title("🏃 Multi-Person Pose Detection")
 
-# --- THREAD-SAFE GLOBAL LANDMARKER ---
-# Using a Lock ensures multiple frames don't hit the landmarker at the exact same time.
-LANDMARKER_LOCK = threading.Lock()
+# --- SETTINGS ---
+st.sidebar.subheader("App Settings")
+debug_mode = st.sidebar.checkbox("Debug mode (Raw Camera)", value=False, help="Disable AI to test if the camera connection works at all.")
 
+# --- CACHED MODEL ---
 @st.cache_resource
 def get_landmarker():
     if not os.path.exists('pose_landmarker.task'):
@@ -43,26 +44,21 @@ def get_landmarker():
         )
         return PoseLandmarker.create_from_options(options)
     except Exception as e:
-        print(f"Error initializing landmarker: {e}")
         return None
 
-# Load it once
 LANDMARKER = get_landmarker()
+LANDMARKER_LOCK = threading.Lock()
 
 st.sidebar.subheader("System Diagnostics")
 st.sidebar.write(f"Python: {sys.version.split()[0]}")
-st.sidebar.write(f"Model State: {'✅ Ready' if LANDMARKER else '❌ Failed to load'}")
-
-if not LANDMARKER:
-    st.error("CRITICAL: Failed to load `pose_landmarker.task`. Ensure the file is at the root of your repository.")
+st.sidebar.write(f"Model: {'✅ Ready' if LANDMARKER else '❌ Error'}")
 
 st.markdown("""
 ### Instructions:
 1. **Required**: At least 2 people for this experiment.
-2. Press the **"Start"** button below.
-3. Grant camera access. (Connection can take 10-20s on first load)
+2. Press **"Start"**.
+3. If the screen stays black, try turning on **"Debug mode"** in the sidebar.
 4. Alerts will show when one person's hand touches another person's face/chest.
-5. **Press 'q' to stop** (or use the Stop button).
 """)
 
 RTC_CONFIGURATION = RTCConfiguration(
@@ -71,19 +67,10 @@ RTC_CONFIGURATION = RTCConfiguration(
             {"urls": ["stun:stun.l.google.com:19302"]},
             {"urls": ["stun:stun1.l.google.com:19302"]},
             {"urls": ["stun:stun2.l.google.com:19302"]},
-            {"urls": ["stun:stun3.l.google.com:19302"]},
-            {"urls": ["stun:stun4.l.google.com:19302"]},
             {"urls": ["stun:stun.services.mozilla.com"]},
-            {"urls": ["stun:stun.ekiga.net"]},
         ]
     }
 )
-
-# Connection Status in Sidebar
-if "ice_state" not in st.session_state:
-    st.session_state.ice_state = "Not Started"
-
-st.sidebar.write(f"WebRTC State: {st.session_state.ice_state}")
 
 POSE_CONNECTIONS = [
     (0, 1), (1, 2), (2, 3), (3, 7), (0, 4), (4, 5), (5, 6), (6, 8), (9, 10),
@@ -96,8 +83,8 @@ def get_face_bbox_from_pose(landmarks):
     face_indices = [0, 1, 2, 3, 4, 5, 6, 7, 8]
     xs = [landmarks[i].x for i in face_indices]
     ys = [landmarks[i].y for i in face_indices]
-    width, height = max(xs) - min(xs), max(ys) - min(ys)
-    return (max(0, min(xs) - width*0.1), max(0, min(ys) - height*0.1), min(1, width*1.2), min(1, height*1.2))
+    w_box, h_box = max(xs) - min(xs), max(ys) - min(ys)
+    return (max(0, min(xs) - w_box*0.1), max(0, min(ys) - h_box*0.1), min(1, w_box*1.2), min(1, h_box*1.2))
 
 def get_chest_bbox_from_pose(landmarks):
     xmin = min(landmarks[11].x, landmarks[12].x, landmarks[23].x, landmarks[24].x)
@@ -105,77 +92,66 @@ def get_chest_bbox_from_pose(landmarks):
     ymin, ymax = min(landmarks[11].y, landmarks[12].y), max(landmarks[23].y, landmarks[24].y)
     return (xmin, ymin, xmax - xmin, (ymax - ymin) * 0.5)
 
-def is_point_in_rect(point, rect):
-    x, y = point
-    return rect[0] <= x <= rect[0] + rect[2] and rect[1] <= y <= rect[1] + rect[3]
-
 class PoseTransformer(VideoProcessorBase):
     def __init__(self):
-        self.PERSON_COLORS = [(0, 255, 0), (255, 0, 0), (0, 255, 255), (255, 0, 255)]
+        self.colors = [(0, 255, 0), (255, 0, 0), (0, 255, 255), (255, 0, 255)]
 
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
         
-        # If model is not loaded, just return the raw frame
-        if LANDMARKER is None:
+        # DEBUG MODE: Skip AI processing
+        if st.session_state.get('debug_mode_active', False):
             return av.VideoFrame.from_ndarray(img, format="bgr24")
 
         try:
             h, w, _ = img.shape
-            rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_img)
+            # Optimization: Resize for faster AI processing on Render
+            process_w = 480
+            process_h = int(h * (process_w / w))
+            small_img = cv2.resize(img, (process_w, process_h))
+            rgb_small = cv2.cvtColor(small_img, cv2.COLOR_BGR2RGB)
+            mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_small)
             
-            # Thread-safe detection
             with LANDMARKER_LOCK:
-                pose_result = LANDMARKER.detect(mp_img)
+                res = LANDMARKER.detect(mp_img) if LANDMARKER else None
 
-            bodies = []
-            if pose_result and pose_result.pose_landmarks:
-                for i, landmarks in enumerate(pose_result.pose_landmarks):
-                    color = self.PERSON_COLORS[i % len(self.PERSON_COLORS)]
-                    face_bbox = get_face_bbox_from_pose(landmarks)
-                    chest_bbox = get_chest_bbox_from_pose(landmarks)
-                    hand_info = [(landmarks[j].x, landmarks[j].y) for j in [19, 20, 17, 18]]
-                    bodies.append({'id': i, 'face': face_bbox, 'chest': chest_bbox, 'hands': hand_info, 'color': color})
+            if res and res.pose_landmarks:
+                for i, lms in enumerate(res.pose_landmarks):
+                    color = self.colors[i % len(self.colors)]
+                    face = get_face_bbox_from_pose(lms)
+                    chest = get_chest_bbox_from_pose(lms)
                     
-                    # Draw Poses
+                    # Draw Poses (scaled back to original size)
                     for s, e in POSE_CONNECTIONS:
-                        if landmarks[s].presence > 0.5 and landmarks[e].presence > 0.5:
-                            cv2.line(img, (int(landmarks[s].x * w), int(landmarks[s].y * h)), (int(landmarks[e].x * w), int(landmarks[e].y * h)), color, 2)
+                        if lms[s].presence > 0.5 and lms[e].presence > 0.5:
+                            cv2.line(img, (int(lms[s].x * w), int(lms[s].y * h)), (int(lms[e].x * w), int(lms[e].y * h)), color, 2)
                     
-                    fx, fy, fw, fh = int(face_bbox[0]*w), int(face_bbox[1]*h), int(face_bbox[2]*w), int(face_bbox[3]*h)
+                    fx, fy, fw, fh = int(face[0]*w), int(face[1]*h), int(face[2]*w), int(face[3]*h)
                     cv2.rectangle(img, (fx, fy), (fx+fw, fy+fh), color, 2)
+                    
+                    # Touch checks
+                    hands = [(lms[j].x, lms[j].y) for j in [19, 20, 17, 18]]
+                    for pt in hands:
+                        cv2.circle(img, (int(pt[0]*w), int(pt[1]*h)), 6, color, -1)
 
-            alerts = []
-            for b in bodies:
-                for pt in b['hands']:
-                    cv2.circle(img, (int(pt[0]*w), int(pt[1]*h)), 6, b['color'], -1)
-                    for other in bodies:
-                        if b['id'] != other['id']:
-                            if is_point_in_rect(pt, other['face']): alerts.append(f"P{b['id']} touch P{other['id']} Face")
-                            elif is_point_in_rect(pt, other['chest']): alerts.append(f"P{b['id']} touch P{other['id']} Chest")
-            
-            if alerts:
-                # Basic flash and text
-                cv2.putText(img, "ALERT: TOUCH DETECTED!", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
-                overlay = img.copy()
-                cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 255), -1)
-                cv2.addWeighted(overlay, 0.2, img, 0.8, 0, img)
+            if LANDMARKER is None:
+                cv2.putText(img, "MODEL LOAD ERROR", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
         except Exception as e:
-            # If processing fails once, just send the frame
             pass
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-def on_ice_connection_state_change(state):
-    st.session_state.ice_state = str(state)
+# Update debug mode state for the thread
+if debug_mode:
+    st.session_state.debug_mode_active = True
+else:
+    st.session_state.debug_mode_active = False
 
 webrtc_streamer(
-    key="pose-detection-final-v5",
+    key="pose-detection-debug-v6",
     video_processor_factory=PoseTransformer,
     rtc_configuration=RTC_CONFIGURATION,
     media_stream_constraints={"video": True, "audio": False},
-    async_processing=False,
-    on_ice_connection_state_change=on_ice_connection_state_change,
+    async_processing=True,
 )
