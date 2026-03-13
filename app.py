@@ -23,153 +23,156 @@ st.set_page_config(page_title="Multi-Person Pose Detection", layout="wide")
 
 st.title("🏃 Multi-Person Pose Detection")
 
-# --- CACHED DETECTORS ---
-@st.cache_resource
-def load_detectors():
-    # 1. Pose Model
-    p_path = 'pose_landmarker.task'
-    p_model = None
-    if os.path.exists(p_path):
-        try:
-            with open(p_path, 'rb') as f:
-                p_data = f.read()
-            p_opts = PoseLandmarkerOptions(
-                base_options=python.BaseOptions(model_asset_buffer=p_data),
-                running_mode=RunningMode.IMAGE,
-                num_poses=4
-            )
-            p_model = PoseLandmarker.create_from_options(p_opts)
-        except: pass
+# --- INITIALIZATION STATUS ---
+status_placeholder = st.empty()
+with status_placeholder.status("🚀 Loading AI Engine...", expanded=True) as status:
+    st.sidebar.subheader("System Diagnostics")
+    st.sidebar.write(f"Python: {sys.version.split()[0]}")
+    
+    @st.cache_resource
+    def load_engines():
+        # Pose Engine
+        p_path = 'pose_landmarker.task'
+        p_engine = None
+        if os.path.exists(p_path):
+            try:
+                base_options = python.BaseOptions(model_asset_buffer=open(p_path, 'rb').read())
+                options = PoseLandmarkerOptions(
+                    base_options=base_options,
+                    running_mode=RunningMode.IMAGE,
+                    num_poses=4,
+                )
+                p_engine = PoseLandmarker.create_from_options(options)
+            except: pass
+            
+        # Optional Hand Engine (for 21 points)
+        h_path = 'hand_landmarker.task'
+        h_engine = None
+        if os.path.exists(h_path):
+            try:
+                base_options = python.BaseOptions(model_asset_buffer=open(h_path, 'rb').read())
+                options = HandLandmarkerOptions(
+                    base_options=base_options,
+                    running_mode=RunningMode.IMAGE,
+                    num_hands=4,
+                )
+                h_engine = HandLandmarker.create_from_options(options)
+            except: pass
+            
+        return p_engine, h_engine
 
-    # 2. Hand Model (Using Task API for compatibility)
-    # Note: Streamlit Cloud usually has hand_landmarker.task or we can use the default.
-    # If we don't have the task file, we'll gracefully fallback.
-    h_path = 'hand_landmarker.task' 
-    h_model = None
-    # For now, let's use the Pose Landmarker only and see if we can get hand points from it.
-    # Actually, PoseLandmarker provides index 15-22 which are wrist/fingers, but not all 21.
-    # Let's try to initialize the HandLandmarker if the file exists.
-    if os.path.exists(h_path):
-        try:
-            with open(h_path, 'rb') as f:
-                h_data = f.read()
-            h_opts = HandLandmarkerOptions(
-                base_options=python.BaseOptions(model_asset_buffer=h_data),
-                running_mode=RunningMode.IMAGE,
-                num_hands=4
-            )
-            h_model = HandLandmarker.create_from_options(h_opts)
-        except: pass
-        
-    return p_model, h_model
+    POSE_ENGINE, HAND_ENGINE = load_engines()
+    
+    st.sidebar.write(f"Pose AI: {'✅ Ready' if POSE_ENGINE else '❌ Missing pose_landmarker.task'}")
+    st.sidebar.write(f"Hand AI: {'✅ Full (21 pts)' if HAND_ENGINE else '⚠️ Basic (4 pts)'}")
+    
+    if HAND_ENGINE:
+        status.update(label="✅ Ready with 21-point tracking!", state="complete", expanded=False)
+    elif POSE_ENGINE:
+        status.update(label="✅ Ready with basic pose tracking!", state="complete", expanded=False)
+    else:
+        st.error("Missing model files! Please upload pose_landmarker.task to your GitHub.")
 
-POSE_LANDMARKER, HAND_LANDMARKER = load_detectors()
-DETECTOR_LOCK = threading.Lock()
-
-st.sidebar.subheader("System Diagnostics")
-st.sidebar.write(f"Python: {sys.version.split()[0]}")
-st.sidebar.write(f"Pose Model: {'✅' if POSE_LANDMARKER else '❌ (Missing pose_landmarker.task)'}")
-st.sidebar.write(f"Hand Model: {'✅' if HAND_LANDMARKER else '⚠️ (hand_landmarker.task missing - showing basic points)'}")
+status_placeholder.empty()
 
 st.markdown("""
 ### Instructions:
 1. **Required**: At least 2 people for this experiment.
 2. Press **"Start"** below.
-3. If `hand_landmarker.task` is in the repo, you will see all **21 hand dots**. 
-4. Otherwise, it will show the basic pose-provided wrist/finger points.
+3. Hand dots will automatically use 21 points if `hand_landmarker.task` is uploaded.
 """)
 
 RTC_CONFIGURATION = RTCConfiguration(
     {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
 )
 
+DETECTOR_LOCK = threading.Lock()
+
 def is_point_in_rect(pt, rect):
     return rect[0] <= pt[0] <= rect[0]+rect[2] and rect[1] <= pt[1] <= rect[1]+rect[3]
 
-class PoseTransformer(VideoProcessorBase):
+class DetectProcessor(VideoProcessorBase):
     def __init__(self):
         self.colors = [(0, 255, 0), (255, 0, 0), (0, 255, 255), (255, 0, 255)]
 
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
-        if not POSE_LANDMARKER:
+        if not POSE_ENGINE:
             return av.VideoFrame.from_ndarray(img, format="bgr24")
 
         try:
             h, w, _ = img.shape
-            rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_img)
+            rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
             
             with DETECTOR_LOCK:
-                pose_res = POSE_LANDMARKER.detect(mp_img)
-                hand_res = HAND_LANDMARKER.detect(mp_img) if HAND_LANDMARKER else None
+                pose_res = POSE_ENGINE.detect(mp_img)
+                hand_res = HAND_ENGINE.detect(mp_img) if HAND_ENGINE else None
 
             bodies = []
-            if pose_res and pose_res.pose_landmarks:
+            if pose_res.pose_landmarks:
                 for i, lms in enumerate(pose_res.pose_landmarks):
                     color = self.colors[i % len(self.colors)]
                     
-                    # Face Bbox
+                    # Boxes
                     face_pts = [lms[j] for j in range(9)]
                     fx, fy = [p.x for p in face_pts], [p.y for p in face_pts]
                     fw, fh = max(fx)-min(fx), max(fy)-min(fy)
-                    face_rect = (min(fx)-fw*0.1, min(fy)-fh*0.5, fw*1.2, fh*2.0)
+                    face_r = (min(fx)-fw*0.1, min(fy)-fh*0.5, fw*1.2, fh*2.0)
                     
-                    # Chest Bbox
-                    cx_min = min(lms[11].x, lms[12].x, lms[23].x, lms[24].x)
-                    cx_max = max(lms[11].x, lms[12].x, lms[23].x, lms[24].x)
-                    cy_min = min(lms[11].y, lms[12].y)
-                    cy_max = max(lms[23].y, lms[24].y)
-                    chest_rect = (cx_min, cy_min, cx_max-cx_min, (cy_max-cy_min)*0.6)
+                    c_min_x = min(lms[11].x, lms[12].x, lms[23].x, lms[24].x)
+                    c_max_x = max(lms[11].x, lms[12].x, lms[23].x, lms[24].x)
+                    c_min_y = min(lms[11].y, lms[12].y)
+                    c_max_y = max(lms[23].y, lms[24].y)
+                    chest_r = (c_min_x, c_min_y, c_max_x-c_min_x, (c_max_y-c_min_y)*0.6)
                     
-                    bodies.append({'id': i, 'face': face_rect, 'chest': chest_rect, 'color': color, 'wrists': [(lms[15].x, lms[15].y), (lms[16].x, lms[16].y)]})
+                    bodies.append({'id': i, 'face': face_r, 'chest': chest_r, 'wrists': [(lms[15].x, lms[15].y), (lms[16].x, lms[16].y)], 'color': color})
                     
-                    # Draw Pose Connections
-                    for conn in mp.solutions.pose.POSE_CONNECTIONS:
-                        if lms[conn[0]].presence > 0.5 and lms[conn[1]].presence > 0.5:
-                            cv2.line(img, (int(lms[conn[0]].x*w), int(lms[conn[0]].y*h)), (int(lms[conn[1]].x*w), int(lms[conn[1]].y*h)), color, 2)
+                    # Draw Poses (skeleton)
+                    # Use indices directly to avoid importing solutions
+                    conns = [(11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23), (12, 24), (23, 24), (23, 25), (25, 27), (24, 26), (26, 28)]
+                    for s, e in conns:
+                        cv2.line(img, (int(lms[s].x*w), int(lms[s].y*h)), (int(lms[e].x*w), int(lms[e].y*h)), color, 2)
                     
-                    # Draw Boxes
-                    bx, by, bw, bh = int(face_rect[0]*w), int(face_rect[1]*h), int(face_rect[2]*w), int(face_rect[3]*h)
+                    bx, by, bw, bh = int(face_r[0]*w), int(face_r[1]*h), int(face_r[2]*w), int(face_r[3]*h)
                     cv2.rectangle(img, (bx, by), (bx+bw, by+bh), color, 2)
                     cv2.putText(img, f"P{i}", (bx, by-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
-            # Draw Hand Details (21 points)
             alerts = []
-            if hand_res and hand_res.hand_landmarks:
-                for h_lms in hand_res.hand_landmarks:
-                    # Associate hand with person via wrist
-                    hw = (h_lms[0].x, h_lms[0].y)
-                    min_d, owner_id = 0.2, -1
+            # Option 1: Hand Model (21 points)
+            if HAND_ENGINE and hand_res and hand_res.hand_landmarks:
+                for hlms in hand_res.hand_landmarks:
+                    hw = (hlms[0].x, hlms[0].y)
+                    best_d, oid = 0.2, -1
                     for b in bodies:
                         for bw in b['wrists']:
                             d = np.sqrt((hw[0]-bw[0])**2 + (hw[1]-bw[1])**2)
-                            if d < min_d: min_d, owner_id = d, b['id']
+                            if d < best_d: best_d, oid = d, b['id']
                     
-                    h_color = bodies[owner_id]['color'] if owner_id != -1 else (128, 128, 128)
-                    for pt in h_lms:
-                        cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 4, h_color, -1)
-                        if owner_id != -1:
+                    hc = bodies[oid]['color'] if oid != -1 else (128, 128, 128)
+                    for pt in hlms:
+                        cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 4, hc, -1)
+                        if oid != -1:
                             for other in bodies:
-                                if owner_id != other['id']:
-                                    if is_point_in_rect((pt.x, pt.y), other['face']): alerts.append((other['id'], owner_id, "Face"))
-                                    elif is_point_in_rect((pt.x, pt.y), other['chest']): alerts.append((other['id'], owner_id, "Chest"))
-            
-            # Fallback draw if hand model missing (dots from pose)
-            elif not hand_res:
+                                if oid != other['id']:
+                                    if is_point_in_rect((pt.x, pt.y), other['face']): alerts.append((other['id'], oid, "Face"))
+                                    elif is_point_in_rect((pt.x, pt.y), other['chest']): alerts.append((other['id'], oid, "Chest"))
+
+            # Option 2: Fallback to Pose-based hand blobs (4 pts per hand, 15-22 landmarks)
+            elif pose_res.pose_landmarks:
                 for b in bodies:
+                    # Show wrists as basic indicators
                     for wr in b['wrists']:
                         cv2.circle(img, (int(wr[0]*w), int(wr[1]*h)), 8, b['color'], -1)
 
             if alerts:
-                unique_alerts = set(alerts)
-                msg = "ALERTS: " + ", ".join([f"P{b} touch P{a} {area}" for a, b, area in unique_alerts])
+                msg = "TOUCH DETECTED: " + ", ".join([f"P{b}->P{a} {area}" for a, b, area in set(alerts)])
                 cv2.putText(img, msg, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
                 overlay = img.copy()
                 cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 255), -1)
                 cv2.addWeighted(overlay, 0.15, img, 0.85, 0, img)
 
-        except Exception: pass
+        except: pass
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-webrtc_streamer(key="pose-final-rollback", video_processor_factory=PoseTransformer, rtc_configuration=RTC_CONFIGURATION, media_stream_constraints={"video": True, "audio": False})
+webrtc_streamer(key="pose-final-fix-v9", video_processor_factory=DetectProcessor, rtc_configuration=RTC_CONFIGURATION, media_stream_constraints={"video": True, "audio": False})
