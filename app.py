@@ -81,92 +81,119 @@ def is_point_in_rect(point, rect):
     rx, ry, rw, rh = rect
     return rx <= x <= rx + rw and ry <= y <= ry + rh
 
+import os
+import sys
+
+# Diagnostics in UI
+st.sidebar.subheader("System Diagnostics")
+st.sidebar.write(f"Python Version: {sys.version.split()[0]}")
+task_file_exists = os.path.exists('pose_landmarker.task')
+st.sidebar.write(f"Model File Found: {'✅' if task_file_exists else '❌'}")
+
+if not task_file_exists:
+    st.error("CRITICAL: `pose_landmarker.task` is missing from the repository root. Please upload it to GitHub!")
+
 class PoseTransformer(VideoTransformerBase):
     def __init__(self):
-        # Initialize Pose Landmarker
-        with open('pose_landmarker.task', 'rb') as f:
-            model_data = f.read()
-        base_options = python.BaseOptions(model_asset_buffer=model_data)
-        options = PoseLandmarkerOptions(
-            base_options=base_options,
-            running_mode=RunningMode.IMAGE,
-            num_poses=4,
-            min_pose_detection_confidence=0.5,
-            min_pose_presence_confidence=0.5
-        )
-        self.pose_landmarker = PoseLandmarker.create_from_options(options)
-        self.PERSON_COLORS = [(0, 255, 0), (255, 0, 0), (0, 255, 255), (255, 0, 255)]
+        try:
+            # Initialize Pose Landmarker
+            if not os.path.exists('pose_landmarker.task'):
+                raise FileNotFoundError("pose_landmarker.task not found!")
+                
+            with open('pose_landmarker.task', 'rb') as f:
+                model_data = f.read()
+            base_options = python.BaseOptions(model_asset_buffer=model_data)
+            options = PoseLandmarkerOptions(
+                base_options=base_options,
+                running_mode=RunningMode.IMAGE,
+                num_poses=4,
+                min_pose_detection_confidence=0.5,
+                min_pose_presence_confidence=0.5
+            )
+            self.pose_landmarker = PoseLandmarker.create_from_options(options)
+            self.PERSON_COLORS = [(0, 255, 0), (255, 0, 0), (0, 255, 255), (255, 0, 255)]
+            self.init_success = True
+        except Exception as e:
+            self.init_success = False
+            self.error_msg = str(e)
 
     def transform(self, frame):
-        image = frame.to_ndarray(format="bgr24")
-        image = cv2.flip(image, 1)
-        h, w, _ = image.shape
-        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_image)
+        if not self.init_success:
+            return frame.to_ndarray(format="bgr24") # Fallback to raw video
 
-        pose_result = self.pose_landmarker.detect(mp_image)
+        try:
+            image = frame.to_ndarray(format="bgr24")
+            image = cv2.flip(image, 1)
+            h, w, _ = image.shape
+            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_image)
 
-        bodies = []
-        if pose_result.pose_landmarks:
-            for i, landmarks in enumerate(pose_result.pose_landmarks):
-                color = self.PERSON_COLORS[i % len(self.PERSON_COLORS)]
-                face_bbox = get_face_bbox_from_pose(landmarks)
-                chest_bbox = get_chest_bbox_from_pose(landmarks)
-                
-                # Hand points (index fingers and pinkies)
-                hand_points = [
-                    (landmarks[19].x, landmarks[19].y), (landmarks[20].x, landmarks[20].y),
-                    (landmarks[17].x, landmarks[17].y), (landmarks[18].x, landmarks[18].y)
-                ]
-                
-                bodies.append({
-                    'id': i,
-                    'face_bbox': face_bbox,
-                    'chest_bbox': chest_bbox,
-                    'hand_points': hand_points,
-                    'color': color
-                })
-                
-                # Draw connections
-                for connection in POSE_CONNECTIONS:
-                    s, e = connection
-                    if landmarks[s].presence > 0.5 and landmarks[e].presence > 0.5:
-                        cv2.line(image, (int(landmarks[s].x * w), int(landmarks[s].y * h)), (int(landmarks[e].x * w), int(landmarks[e].y * h)), color, 2)
-                
-                # Draw boxes
-                fox, foy, fow, foh = int(face_bbox[0]*w), int(face_bbox[1]*h), int(face_bbox[2]*w), int(face_bbox[3]*h)
-                cv2.rectangle(image, (fox, foy), (fox+fow, foy+foh), color, 2)
-                cv2.putText(image, f"P{i}", (fox, foy-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            pose_result = self.pose_landmarker.detect(mp_image)
 
-        alerts = []
-        for body in bodies:
-            owner_id = body['id']
-            color = body['color']
-            
-            # Show hand circles
-            for pt in body['hand_points']:
-                cv2.circle(image, (int(pt[0] * w), int(pt[1] * h)), 6, color, -1)
+            bodies = []
+            if pose_result.pose_landmarks:
+                for i, landmarks in enumerate(pose_result.pose_landmarks):
+                    color = self.PERSON_COLORS[i % len(self.PERSON_COLORS)]
+                    face_bbox = get_face_bbox_from_pose(landmarks)
+                    chest_bbox = get_chest_bbox_from_pose(landmarks)
+                    
+                    # Hand points (index fingers and pinkies)
+                    hand_points = [
+                        (landmarks[19].x, landmarks[19].y), (landmarks[20].x, landmarks[20].y),
+                        (landmarks[17].x, landmarks[17].y), (landmarks[18].x, landmarks[18].y)
+                    ]
+                    
+                    bodies.append({
+                        'id': i,
+                        'face_bbox': face_bbox,
+                        'chest_bbox': chest_bbox,
+                        'hand_points': hand_points,
+                        'color': color
+                    })
+                    
+                    # Draw connections
+                    for connection in POSE_CONNECTIONS:
+                        s, e = connection
+                        if landmarks[s].presence > 0.5 and landmarks[e].presence > 0.5:
+                            cv2.line(image, (int(landmarks[s].x * w), int(landmarks[s].y * h)), (int(landmarks[e].x * w), int(landmarks[e].y * h)), color, 2)
+                    
+                    # Draw boxes
+                    fox, foy, fow, foh = int(face_bbox[0]*w), int(face_bbox[1]*h), int(face_bbox[2]*w), int(face_bbox[3]*h)
+                    cv2.rectangle(image, (fox, foy), (fox+fow, foy+foh), color, 2)
+                    cv2.putText(image, f"P{i}", (fox, foy-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+            alerts = []
+            for body in bodies:
+                owner_id = body['id']
+                color = body['color']
                 
-                # Check touch with other bodies
-                for other_body in bodies:
-                    if owner_id != other_body['id']:
-                        if is_point_in_rect(pt, other_body['face_bbox']):
-                            alerts.append((other_body['id'], owner_id, "Face"))
-                        elif is_point_in_rect(pt, other_body['chest_bbox']):
-                            alerts.append((other_body['id'], owner_id, "Chest"))
+                # Show hand circles
+                for pt in body['hand_points']:
+                    cv2.circle(image, (int(pt[0] * w), int(pt[1] * h)), 6, color, -1)
+                    
+                    # Check touch with other bodies
+                    for other_body in bodies:
+                        if owner_id != other_body['id']:
+                            if is_point_in_rect(pt, other_body['face_bbox']):
+                                alerts.append((other_body['id'], owner_id, "Face"))
+                            elif is_point_in_rect(pt, other_body['chest_bbox']):
+                                alerts.append((other_body['id'], owner_id, "Chest"))
 
-        if alerts:
-            alert_text = "ALERTS: " + ", ".join([f"P{b} touches P{a}'s {area}!" for a, b, area in set(alerts)])
-            cv2.putText(image, alert_text, (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            overlay = image.copy()
-            cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 255), -1)
-            cv2.addWeighted(overlay, 0.15, image, 0.85, 0, image)
+            if alerts:
+                alert_text = "ALERTS: " + ", ".join([f"P{b} touches P{a}'s {area}!" for a, b, area in set(alerts)])
+                cv2.putText(image, alert_text, (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                overlay = image.copy()
+                cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 255), -1)
+                cv2.addWeighted(overlay, 0.15, image, 0.85, 0, image)
 
-        return image
+            return image
+        except Exception:
+            return frame.to_ndarray(format="bgr24")
 
 webrtc_streamer(
     key="pose-detection",
     video_processor_factory=PoseTransformer,
     rtc_configuration=RTC_CONFIGURATION,
     media_stream_constraints={"video": True, "audio": False},
+    async_processing=True, # Improved performance for cloud
 )
