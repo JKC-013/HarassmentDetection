@@ -39,7 +39,7 @@ with status_placeholder.status("🚀 Initializing AI Engine...", expanded=True) 
                 p_engine = PoseLandmarker.create_from_options(PoseLandmarkerOptions(
                     base_options=python.BaseOptions(model_asset_path=p_path),
                     running_mode=RunningMode.IMAGE,
-                    num_poses=4,
+                    num_poses=2,
                 ))
             except: pass
             
@@ -51,7 +51,7 @@ with status_placeholder.status("🚀 Initializing AI Engine...", expanded=True) 
                 h_engine = HandLandmarker.create_from_options(HandLandmarkerOptions(
                     base_options=python.BaseOptions(model_asset_path=h_path),
                     running_mode=RunningMode.IMAGE,
-                    num_hands=4,
+                    num_hands=2,
                 ))
             except: pass
             
@@ -176,4 +176,4 @@ class DetectProcessor(VideoProcessorBase):
             cv2.putText(img, f"Error: {str(e)}", (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-webrtc_streamer(key="pose-final-engine-v13-pro", video_processor_factory=DetectProcessor, rtc_configuration=RTC_CONFIGURATION, media_stream_constraints={"video": True, "audio": False}, async_processing=False)
+webrtc_streamer(key="pose-final-engine-v14-fast", video_processor_factory=DetectProcessor, rtc_configuration=RTC_CONFIGURATION, media_stream_constraints={"video": True, "audio": False}, async_processing=True)
