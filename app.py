@@ -78,11 +78,7 @@ st.markdown("""
 """)
 
 RTC_CONFIGURATION = RTCConfiguration(
-    {"iceServers": [
-        {"urls": ["stun:stun.l.google.com:19302"]},
-        {"urls": ["stun:stun1.l.google.com:19302"]},
-        {"urls": ["stun:stun2.l.google.com:19302"]}
-    ]}
+    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
 )
 
 DETECTOR_LOCK = threading.Lock()
@@ -180,4 +176,4 @@ class DetectProcessor(VideoProcessorBase):
             cv2.putText(img, f"Error: {str(e)}", (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-webrtc_streamer(key="pose-final-engine-v12-stable", video_processor_factory=DetectProcessor, rtc_configuration=RTC_CONFIGURATION, media_stream_constraints={"video": True, "audio": False}, async_processing=True)
+webrtc_streamer(key="pose-final-engine-v13-pro", video_processor_factory=DetectProcessor, rtc_configuration=RTC_CONFIGURATION, media_stream_constraints={"video": True, "audio": False}, async_processing=False)
