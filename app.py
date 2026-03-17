@@ -37,7 +37,7 @@ with status_placeholder.status("🚀 Initializing AI Engine...", expanded=True) 
         if os.path.exists(p_path):
             try:
                 p_engine = PoseLandmarker.create_from_options(PoseLandmarkerOptions(
-                    base_options=python.BaseOptions(model_asset_buffer=open(p_path, 'rb').read()),
+                    base_options=python.BaseOptions(model_asset_path=p_path),
                     running_mode=RunningMode.IMAGE,
                     num_poses=4,
                 ))
@@ -49,7 +49,7 @@ with status_placeholder.status("🚀 Initializing AI Engine...", expanded=True) 
         if os.path.exists(h_path):
             try:
                 h_engine = HandLandmarker.create_from_options(HandLandmarkerOptions(
-                    base_options=python.BaseOptions(model_asset_buffer=open(h_path, 'rb').read()),
+                    base_options=python.BaseOptions(model_asset_path=h_path),
                     running_mode=RunningMode.IMAGE,
                     num_hands=4,
                 ))
@@ -78,7 +78,11 @@ st.markdown("""
 """)
 
 RTC_CONFIGURATION = RTCConfiguration(
-    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+    {"iceServers": [
+        {"urls": ["stun:stun.l.google.com:19302"]},
+        {"urls": ["stun:stun1.l.google.com:19302"]},
+        {"urls": ["stun:stun2.l.google.com:19302"]}
+    ]}
 )
 
 DETECTOR_LOCK = threading.Lock()
@@ -176,4 +180,4 @@ class DetectProcessor(VideoProcessorBase):
             cv2.putText(img, f"Error: {str(e)}", (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-webrtc_streamer(key="pose-final-engine-v11-mirrored", video_processor_factory=DetectProcessor, rtc_configuration=RTC_CONFIGURATION, media_stream_constraints={"video": True, "audio": False}, async_processing=True)
+webrtc_streamer(key="pose-final-engine-v12-stable", video_processor_factory=DetectProcessor, rtc_configuration=RTC_CONFIGURATION, media_stream_constraints={"video": True, "audio": False}, async_processing=True)
