@@ -7,6 +7,7 @@ import os
 import sys
 import threading
 import av
+import time
 
 # MediaPipe Tasks API
 from mediapipe.tasks import python
@@ -89,8 +90,16 @@ def is_point_in_rect(pt, rect):
 class DetectProcessor(VideoProcessorBase):
     def __init__(self):
         self.colors = [(0, 255, 0), (255, 0, 0), (0, 255, 255), (255, 0, 255)]
+        self.last_ts = time.time()
+        self.fps = 0
+        self.frame_count = 0
 
     def recv(self, frame):
+        now = time.time()
+        self.fps = 1.0 / (now - self.last_ts) if (now - self.last_ts) > 0 else 0
+        self.last_ts = now
+        self.frame_count += 1
+
         img = frame.to_ndarray(format="bgr24")
         
         # Mirror flip (matches local behavior)
@@ -174,6 +183,36 @@ class DetectProcessor(VideoProcessorBase):
 
         except Exception as e:
             cv2.putText(img, f"Error: {str(e)}", (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+        
+        # Display FPS on screen
+        cv2.putText(img, f"FPS: {self.fps:.1f}", (img.shape[1]-120, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-webrtc_streamer(key="pose-final-engine-v14-fast", video_processor_factory=DetectProcessor, rtc_configuration=RTC_CONFIGURATION, media_stream_constraints={"video": True, "audio": False}, async_processing=True)
+webrtc_ctx = webrtc_streamer(
+    key="pose-final-engine-v14-fast", 
+    video_processor_factory=DetectProcessor, 
+    rtc_configuration=RTC_CONFIGURATION, 
+    media_stream_constraints={"video": True, "audio": False}, 
+    async_processing=True
+)
+
+# --- DEBUG REPORT GENERATOR ---
+st.sidebar.markdown("---")
+st.sidebar.subheader("🐞 Troubleshooting")
+if st.sidebar.button("📋 Generate Debug Report"):
+    fps_val = "N/A (Stream not active)"
+    if webrtc_ctx.video_processor:
+        fps_val = f"{webrtc_ctx.video_processor.fps:.1f}"
+    
+    report = f"""--- CAMERA DEBUG REPORT ---
+Python: {sys.version.split()[0]}
+Streamlit: {st.__version__}
+MediaPipe: {mp.__version__}
+Pose AI: {'Ready' if POSE_ENGINE else 'Missing'}
+Hand AI: {'Ready' if HAND_ENGINE else 'Missing'}
+Current FPS: {fps_val}
+OS: {sys.platform}
+---------------------------"""
+    st.sidebar.code(report, language="text")
+    st.sidebar.info("👆 Copy this message and send it to your friend!")
