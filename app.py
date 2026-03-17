@@ -71,9 +71,10 @@ status_placeholder.empty()
 
 st.markdown("""
 ### Instructions:
-1. **At least 2 people** required.
-2. Press **"Start"** to open camera.
-3. Hand dots will automatically switch to **21 points** if you upload `hand_landmarker.task`.
+1. **At least 2 people** for touch detection.
+2. Press **"Start"** to open camera (Mirrored view).
+3. Optimized for **Multiple Sessions** (AI engine shared via locking).
+4. If hand dots missing, ensure `hand_landmarker.task` is in the root folder.
 """)
 
 RTC_CONFIGURATION = RTCConfiguration(
@@ -91,6 +92,10 @@ class DetectProcessor(VideoProcessorBase):
 
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
+        
+        # Mirror flip (matches local behavior)
+        img = cv2.flip(img, 1)
+        
         if not POSE_ENGINE:
             return av.VideoFrame.from_ndarray(img, format="bgr24")
 
@@ -99,12 +104,14 @@ class DetectProcessor(VideoProcessorBase):
             rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
             
+            # --- INFERENCE STEP (LOCK PROTECTED) ---
             with DETECTOR_LOCK:
                 pose_res = POSE_ENGINE.detect(mp_img)
                 hand_res = HAND_ENGINE.detect(mp_img) if HAND_ENGINE else None
 
+            # --- POST-PROCESSING (NO LOCK NEEDED) ---
             bodies = []
-            if pose_res.pose_landmarks:
+            if pose_res and pose_res.pose_landmarks:
                 for i, lms in enumerate(pose_res.pose_landmarks):
                     color = self.colors[i % len(self.colors)]
                     
@@ -143,17 +150,17 @@ class DetectProcessor(VideoProcessorBase):
                             d = np.sqrt((hw[0]-bw[0])**2 + (hw[1]-bw[1])**2)
                             if d < best_d: best_d, oid = d, b['id']
                     
-                    hc = bodies[oid]['color'] if oid != -1 else (128, 128, 128)
+                    hc = bodies[oid]['color'] if (oid != -1 and oid < len(bodies)) else (128, 128, 128)
                     for pt in hlms:
                         cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 4, hc, -1)
-                        if oid != -1:
+                        if oid != -1 and oid < len(bodies):
                             for other in bodies:
                                 if oid != other['id']:
                                     if is_point_in_rect((pt.x, pt.y), other['face']): alerts.append((other['id'], oid, "Face"))
                                     elif is_point_in_rect((pt.x, pt.y), other['chest']): alerts.append((other['id'], oid, "Chest"))
 
             # Fallback to basic wrist dots if hand model missing
-            elif pose_res.pose_landmarks:
+            elif pose_res and pose_res.pose_landmarks:
                 for b in bodies:
                     for wr in b['wrists']:
                         cv2.circle(img, (int(wr[0]*w), int(wr[1]*h)), 10, b['color'], -1)
@@ -165,7 +172,8 @@ class DetectProcessor(VideoProcessorBase):
                 cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 255), -1)
                 cv2.addWeighted(overlay, 0.15, img, 0.85, 0, img)
 
-        except: pass
+        except Exception as e:
+            cv2.putText(img, f"Error: {str(e)}", (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-webrtc_streamer(key="pose-final-engine-v10", video_processor_factory=DetectProcessor, rtc_configuration=RTC_CONFIGURATION, media_stream_constraints={"video": True, "audio": False}, async_processing=True)
+webrtc_streamer(key="pose-final-engine-v11-mirrored", video_processor_factory=DetectProcessor, rtc_configuration=RTC_CONFIGURATION, media_stream_constraints={"video": True, "audio": False}, async_processing=True)
