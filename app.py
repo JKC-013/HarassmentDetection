@@ -184,6 +184,7 @@ def video_frame_callback(frame):
         
         # Return frame immediately
         return av.VideoFrame.from_ndarray(img, format="bgr24")
+    except Exception as e:
         print(f"❌ Frame processing error: {e}")
         import traceback
         traceback.print_exc()
@@ -231,7 +232,7 @@ st.sidebar.info("""
 # Using empty config to rely on direct connection
 try:
     RTC_CONFIG = RTCConfiguration({"iceServers": []})
-except:
+except Exception:
     RTC_CONFIG = None
 
 # Simplest possible WebRTC configuration

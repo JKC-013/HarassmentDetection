@@ -1,0 +1,8 @@
+venv/
+.git/
+.python-version
+hf_deployment/
+detect.py
+*.ipynb
+__pycache__/
+.pytest_cache/
