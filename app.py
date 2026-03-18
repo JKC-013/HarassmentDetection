@@ -119,6 +119,7 @@ print(f"Model loading complete. Pose: {pose_engine is not None}, Hand: {hand_eng
 # --- CALLBACK FUNCTION ---
 
 def video_frame_callback(frame):
+    """Minimal callback to keep WebRTC connection alive."""
     try:
         img = frame.to_ndarray(format="bgr24")
         
@@ -126,18 +127,24 @@ def video_frame_callback(frame):
         img = cv2.flip(img, 1)
         h, w = img.shape[:2]
         
-        # If models aren't loaded, just return the frame without processing
-        if pose_engine is None and hand_engine is None:
-            cv2.putText(img, "Waiting for models to load...", (25, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 165, 255), 2)
-            return av.VideoFrame.from_ndarray(img, format="bgr24")
+        # Add status text
+        if pose_engine is None or hand_engine is None:
+            status_text = "Loading models..."
+            status_color = (0, 165, 255)
+        else:
+            status_text = "AI ACTIVE"
+            status_color = (0, 255, 0)
         
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
+        cv2.putText(img, status_text, (25, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, status_color, 2)
         
-        # --- ASYNC INFERENCE LOGIC ---
-        # Try to grab the lock. If AI is busy, we SKIP inference and just draw the PREVIOUS results.
-        # THIS PREVENTS STALLING THE STREAM.
-        if not ai_state.processing and (pose_engine is not None or hand_engine is not None):
+        # Return frame first to keep connection alive
+        result_frame = av.VideoFrame.from_ndarray(img, format="bgr24")
+        
+        # Only run inference if BOTH models are loaded and not already processing
+        if pose_engine is not None and hand_engine is not None and not ai_state.processing:
+            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
+            
             def run_inference():
                 ai_state.processing = True
                 try:
@@ -146,14 +153,13 @@ def video_frame_callback(frame):
                     if hand_engine:
                         ai_state.hand_results = hand_engine.detect(mp_img)
                 except Exception as e:
-                    print(f"Inference error: {e}")
+                    print(f"⚠️ Inference error: {e}")
                 finally:
                     ai_state.processing = False
             
-            # Start inference in a background thread if it's not already running
             threading.Thread(target=run_inference, daemon=True).start()
-
-        # --- DRAWING (USING LATEST KNOWN RESULTS) ---
+        
+        # Draw detection results on the frame
         with ai_state.lock:
             pres = ai_state.pose_results
             hres = ai_state.hand_results
@@ -173,12 +179,10 @@ def video_frame_callback(frame):
             for hlms in hres.hand_landmarks:
                 for pt in hlms:
                     cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 5, (255, 255, 255), -1)
-
-        status_text = "AI ACTIVE" if (pose_engine is not None or hand_engine is not None) else "Models Loading..."
-        status_color = (0, 255, 0) if (pose_engine is not None or hand_engine is not None) else (0, 165, 255)
-        cv2.putText(img, status_text, (25, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, status_color, 2)
         
-        return av.VideoFrame.from_ndarray(img, format="bgr24")
+        # Update and return final frame
+        result_frame = av.VideoFrame.from_ndarray(img, format="bgr24")
+        return result_frame
     except Exception as e:
         print(f"❌ Frame processing error: {e}")
         import traceback
