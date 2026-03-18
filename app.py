@@ -202,7 +202,6 @@ try:
             "audio": False
         },
         async_processing=True,
-        rtc_configuration_timeout=10,
     )
 except Exception as e:
     st.error(f"WebRTC Error: {str(e)}")
