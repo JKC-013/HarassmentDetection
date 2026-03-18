@@ -2,7 +2,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, RTCConfiguration, VideoFrameCallback
+from streamlit_webrtc import webrtc_streamer, RTCConfiguration, VideoFrameCallback, WebRtcMode
 import os
 import av
 from mediapipe.tasks import python
@@ -31,7 +31,7 @@ def load_mediapipe_engines():
             options = vision.PoseLandmarkerOptions(
                 base_options=python.BaseOptions(model_asset_path=p_path),
                 running_mode=vision.RunningMode.IMAGE,
-                num_poses=4
+                num_poses=2
             )
             pose_engine = vision.PoseLandmarker.create_from_options(options)
             status_msg.append("✅ Pose Engine Loaded")
@@ -126,19 +126,14 @@ st.sidebar.markdown("""
 - **Hand Landmarks**: White Dots
 """)
 
-# Robust RTC Configuration with multiple STUN servers
+# Simplified RTC Configuration (One STUN server often more stable on Cloud)
 RTC_CONFIG = RTCConfiguration(
-    {"iceServers": [
-        {"urls": ["stun:stun.l.google.com:19302"]},
-        {"urls": ["stun:stun1.l.google.com:19302"]},
-        {"urls": ["stun:stun2.l.google.com:19302"]},
-        {"urls": ["stun:stun3.l.google.com:19302"]},
-        {"urls": ["stun:stun4.l.google.com:19302"]},
-    ]}
+    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
 )
 
 webrtc_streamer(
-    key="harassment-detection",
+    key="harassment-detection-v12-fast-stable",
+    mode=WebRtcMode.SENDRECV,
     video_frame_callback=video_frame_callback,
     rtc_configuration=RTC_CONFIG,
     media_stream_constraints={"video": True, "audio": False},
