@@ -7,7 +7,6 @@ import os
 import av
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
-import urllib.request
 
 # ============================================================================
 # CONFIG
@@ -21,36 +20,12 @@ st.set_page_config(
 )
 
 # ============================================================================
-# HELPER FUNCTIONS
-# ============================================================================
-
-def download_model_if_missing(model_name, url):
-    """Download MediaPipe model if not present locally."""
-    if os.path.exists(model_name):
-        return model_name
-    
-    try:
-        print(f"📥 Downloading {model_name}...")
-        urllib.request.urlretrieve(url, model_name)
-        return model_name if os.path.exists(model_name) else None
-    except Exception as e:
-        print(f"❌ Download failed: {e}")
-        return None
-
-# ============================================================================
 # MODEL LOADING
 # ============================================================================
 
 @st.cache_resource
 def load_mediapipe_engines():
     """Load pose and hand detection models."""
-    pose_url = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full.tflite"
-    hand_url = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker.task"
-    
-    # Download if missing
-    download_model_if_missing("pose_landmarker.task", pose_url)
-    download_model_if_missing("hand_landmarker.task", hand_url)
-    
     # Check paths (Docker or local)
     p_path = '/app/pose_landmarker.task' if os.path.exists('/app/pose_landmarker.task') else 'pose_landmarker.task'
     h_path = '/app/hand_landmarker.task' if os.path.exists('/app/hand_landmarker.task') else 'hand_landmarker.task'
@@ -69,7 +44,7 @@ def load_mediapipe_engines():
             pose_engine = vision.PoseLandmarker.create_from_options(options)
             status.append("✅ Pose Detection Ready")
         else:
-            status.append("⚠️ Pose Model Downloading...")
+            status.append("❌ Pose Model Not Found")
     except Exception as e:
         status.append(f"❌ Pose Error: {str(e)[:50]}")
     
@@ -83,7 +58,7 @@ def load_mediapipe_engines():
             hand_engine = vision.HandLandmarker.create_from_options(options)
             status.append("✅ Hand Detection Ready")
         else:
-            status.append("⚠️ Hand Model Downloading...")
+            status.append("❌ Hand Model Not Found")
     except Exception as e:
         status.append(f"❌ Hand Error: {str(e)[:50]}")
     
