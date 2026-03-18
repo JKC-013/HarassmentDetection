@@ -107,21 +107,8 @@ with st.sidebar:
 # Main content
 st.divider()
 
-# WebRTC Config
-try:
-    rtc_config = RTCConfiguration({
-        "iceServers": [
-            {"urls": ["stun:stun.l.google.com:19302"]},
-            {"urls": ["stun:stun1.l.google.com:19302"]},
-            {
-                "urls": ["turn:openrelay.metered.ca:80"],
-                "username": "openrelayproject",
-                "credential": "openrelayproject"
-            }
-        ]
-    })
-except Exception:
-    rtc_config = None
+# WebRTC Config - use defaults (no explicit STUN/TURN)
+rtc_config = None
 
 # Camera frame callback
 def video_frame_callback(frame):
