@@ -7,6 +7,7 @@ import os
 import av
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+from PIL import Image
 
 # ============================================================================
 # CONFIG
@@ -107,6 +108,9 @@ with st.sidebar:
 # Main content
 st.divider()
 
+# Create tabs for Live and Photo modes
+tab1, tab2 = st.tabs(["📹 Live Camera", "📷 Photo Analysis"])
+
 # WebRTC Config - use defaults (no explicit STUN/TURN)
 rtc_config = None
 
@@ -121,11 +125,11 @@ def video_frame_callback(frame):
         print(f"Frame error: {e}")
         return frame
 
-# Display camera
-col1, col2 = st.columns([2, 1])
-
-with col1:
+# TAB 1: Live Camera (WebRTC)
+with tab1:
     st.subheader("📹 Live Camera Feed")
+    st.write("Real-time pose and hand detection")
+    
     try:
         webrtc_streamer(
             key="harassment-detection",
@@ -136,36 +140,58 @@ with col1:
             async_processing=False,
         )
     except Exception as e:
-        st.error(f"❌ Camera Error: {str(e)}")
-        with st.expander("📖 Troubleshooting"):
-            st.markdown("""
-            **Common Issues:**
-            - **Connection timeout**: Refresh page, try different browser
-            - **Permission denied**: Check browser camera permissions
-            - **Black screen**: Grant permission and wait 2-3 seconds
-            
-            **Browser Support:**
-            - Chrome/Edge: ✅ Best
-            - Firefox: ✅ Good
-            - Safari: ⚠️ Limited
-            """)
+        st.error(f"❌ Live Camera Error: {str(e)}")
+        st.info("💡 If camera doesn't work here, try the **Photo Analysis** tab instead!")
 
-with col2:
-    st.subheader("ℹ️ Info")
-    st.info("""
-    **Models:**
-    - MediaPipe Pose
-    - MediaPipe Hands
+# TAB 2: Photo-based Analysis (Fallback)
+with tab2:
+    st.subheader("📷 Photo-Based Detection")
+    st.write("Take a photo and see instant detection results")
     
-    **Frame Rate:**
-    - ~20 FPS
+    picture = st.camera_input("Take a picture")
     
-    **Supported:**
-    - Up to 2 people
-    - Up to 4 hands
-    """)
-
-# Footer
-st.divider()
-st.caption("🔐 Built with Streamlit + MediaPipe • No data stored")
+    if picture is not None:
+        # Convert to opencv format
+        from PIL import Image
+        img_pil = Image.open(picture)
+        img = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+        
+        st.subheader("Processing...")
+        
+        # Run detection
+        try:
+            if pose_engine is not None and hand_engine is not None:
+                h, w = img.shape[:2]
+                img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
+                
+                # Run detections
+                pose_result = pose_engine.detect(mp_img)
+                hand_result = hand_engine.detect(mp_img)
+                
+                # Draw pose landmarks
+                if pose_result.pose_landmarks:
+                    for lms in pose_result.pose_landmarks:
+                        conns = [(11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23), (12, 24), (23, 24)]
+                        for s, e in conns:
+                            if s < len(lms) and e < len(lms):
+                                p1 = (int(lms[s].x*w), int(lms[s].y*h))
+                                p2 = (int(lms[e].x*w), int(lms[e].y*h))
+                                cv2.line(img, p1, p2, (0, 255, 0), 4)
+                        for pt in lms:
+                            cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 4, (0, 255, 0), -1)
+                
+                # Draw hand landmarks
+                if hand_result.hand_landmarks:
+                    for hlms in hand_result.hand_landmarks:
+                        for pt in hlms:
+                            cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 5, (255, 255, 255), -1)
+                
+                # Display result
+                st.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), caption="Detection Results", use_column_width=True)
+                st.success("✅ Detection complete!")
+            else:
+                st.warning("⏳ Models still loading...")
+        except Exception as e:
+            st.error(f"Detection error: {e}")
 
