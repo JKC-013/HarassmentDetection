@@ -11,18 +11,18 @@ from mediapipe.tasks.python import vision
 import threading
 import time
 
-# --- SHARED STATE FOR ASYNC AI ---
-class AIState:
+# --- SHARED STATE FOR ASYNC AI (GLOBAL FOR THREAD-SAFE ACCESS) ---
+class GlobalAIState:
     def __init__(self):
         self.pose_results = None
         self.hand_results = None
-        self.lock = threading.Lock()
         self.processing = False
+        self.lock = threading.Lock()
 
-if "ai_state" not in st.session_state:
-    st.session_state.ai_state = AIState()
+if 'GLOBAL_AI_STATE' not in globals():
+    globals()['GLOBAL_AI_STATE'] = GlobalAIState()
 
-ai_state = st.session_state.ai_state
+ai_state = globals()['GLOBAL_AI_STATE']
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Harassment Detection AI", layout="wide")
@@ -152,8 +152,9 @@ RTC_CONFIG = RTCConfiguration(
     {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
 )
 
+# Final Glitch-Proof Configuration
 webrtc_streamer(
-    key="harassment-detection-glitch-proof-v1",
+    key="harassment-detection-stable-v100", # New key to force widget refresh
     mode=WebRtcMode.SENDRECV,
     video_frame_callback=video_frame_callback,
     rtc_configuration=RTC_CONFIG,
@@ -161,7 +162,7 @@ webrtc_streamer(
         "video": {
             "width": {"ideal": 640},
             "height": {"ideal": 480},
-            "frameRate": {"ideal": 15}
+            "frameRate": {"ideal": 20}
         },
         "audio": False
     },
