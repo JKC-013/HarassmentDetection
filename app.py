@@ -175,21 +175,38 @@ st.sidebar.markdown("""
 - **Hand Landmarks**: White Dots
 """)
 
-# Simplified RTC Configuration (One STUN server often more stable on Cloud)
+# Improved RTC Configuration with multiple STUN servers for redundancy
 RTC_CONFIG = RTCConfiguration(
-    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+    {
+        "iceServers": [
+            {"urls": ["stun:stun.l.google.com:19302"]},
+            {"urls": ["stun:stun1.l.google.com:19302"]},
+            {"urls": ["stun:stun2.l.google.com:19302"]},
+        ]
+    }
 )
 
 # Final Glitch-Proof Configuration
-webrtc_streamer(
-    key="harassment-detection-stable-v100", # New key to force widget refresh
-    mode=WebRtcMode.SENDRECV,
-    video_frame_callback=video_frame_callback,
-    rtc_configuration=RTC_CONFIG,
-    media_stream_constraints={
-        "video": {
-            "width": {"ideal": 640},
-            "height": {"ideal": 480},
+try:
+    webrtc_streamer(
+        key="harassment-detection-stable-v101",
+        mode=WebRtcMode.SENDRECV,
+        video_frame_callback=video_frame_callback,
+        rtc_configuration=RTC_CONFIG,
+        media_stream_constraints={
+            "video": {
+                "width": {"ideal": 640},
+                "height": {"ideal": 480},
+                "frameRate": {"ideal": 20}
+            },
+            "audio": False
+        },
+        async_processing=True,
+        rtc_configuration_timeout=10,
+    )
+except Exception as e:
+    st.error(f"WebRTC Error: {str(e)}")
+    st.info("Please refresh the page and try again.")
             "frameRate": {"ideal": 20}
         },
         "audio": False
