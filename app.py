@@ -207,9 +207,4 @@ try:
 except Exception as e:
     st.error(f"WebRTC Error: {str(e)}")
     st.info("Please refresh the page and try again.")
-            "frameRate": {"ideal": 20}
-        },
-        "audio": False
-    },
-    async_processing=True,
-)
+
