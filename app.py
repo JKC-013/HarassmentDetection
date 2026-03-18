@@ -2,9 +2,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, RTCConfiguration, WebRtcMode
 import os
-import av
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from PIL import Image
@@ -109,48 +107,10 @@ with st.sidebar:
 st.divider()
 
 # Create tabs for different modes
-tab1, tab2, tab3 = st.tabs(["📹 Live Camera (WebRTC)", "📷 Photo Analysis", "🖥️ Server Streaming"])
+tab1, tab2 = st.tabs(["📷 Photo Analysis", "🖥️ Server Streaming"])
 
-# Camera frame callback
-def video_frame_callback(frame):
-    """Process video frame - keep as minimal as possible."""
-    try:
-        img = frame.to_ndarray(format="bgr24")
-        # Just flip and return - no other processing
-        return av.VideoFrame.from_ndarray(cv2.flip(img, 1), format="bgr24")
-    except Exception:
-        return frame
-
-# TAB 1: Live Camera (WebRTC)
+# TAB 1: Photo-based Analysis (Fallback)
 with tab1:
-    st.subheader("📹 Live Camera Feed")
-    st.write("Real-time pose and hand detection")
-    
-    # RTC Config - explicitly empty to use browser defaults
-    try:
-        rtc_config_live = RTCConfiguration({"iceServers": []})
-    except Exception:
-        rtc_config_live = None
-    
-    try:
-        webrtc_streamer(
-            key="harassment-detection-live",
-            mode=WebRtcMode.RECVONLY,  # Simpler mode: receive only
-            video_frame_callback=video_frame_callback,
-            rtc_configuration=rtc_config_live,
-            media_stream_constraints={
-                "video": {"width": {"max": 640}, "height": {"max": 480}},
-                "audio": False
-            },
-            async_processing=False,
-            webrtc_connection_timeout=30,  # Increase timeout
-        )
-    except Exception as e:
-        st.error(f"❌ Live Camera Error: {str(e)}")
-        st.info("💡 If camera doesn't work here, try the **Photo Analysis** tab instead!")
-
-# TAB 2: Photo-based Analysis (Fallback)
-with tab2:
     st.subheader("📷 Photo-Based Detection")
     st.write("Take a photo and see instant detection results")
     
@@ -201,8 +161,8 @@ with tab2:
         except Exception as e:
             st.error(f"Detection error: {e}")
 
-# TAB 3: Server-side Streaming (EXPERIMENTAL)
-with tab3:
+# TAB 2: Server-side Streaming
+with tab2:
     st.subheader("🖥️ Server-Side Real-Time Streaming")
     st.write("Uses Flask + OpenCV for server-side processing (works across networks!)")
     

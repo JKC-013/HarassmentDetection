@@ -4,12 +4,26 @@ This uses Flask + OpenCV + HTTP streaming (MJPEG) instead of WebRTC P2P.
 Works across networks and firewalls.
 """
 
+# Setup headless display for Render
+import os
+import subprocess
+import sys
+
+# Try to start virtual display (xvfb)
+try:
+    subprocess.Popen(['Xvfb', ':99', '-screen', '0', '640x480x24'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    os.environ['DISPLAY'] = ':99'
+    print("✅ Virtual display started (Xvfb)")
+except (FileNotFoundError, Exception) as e:
+    print(f"⚠️  Xvfb not available: {e}")
+    os.environ['DISPLAY'] = ''
+    os.environ['LIBGL_ALWAYS_INDIRECT'] = '1'
+
 import cv2
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 import threading
-import os
 from flask import Flask, render_template_string, Response
 import numpy as np
 
