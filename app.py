@@ -8,6 +8,22 @@ import av
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
+import threading
+import time
+
+# --- SHARED STATE FOR ASYNC AI ---
+class AIState:
+    def __init__(self):
+        self.pose_results = None
+        self.hand_results = None
+        self.lock = threading.Lock()
+        self.processing = False
+
+if "ai_state" not in st.session_state:
+    st.session_state.ai_state = AIState()
+
+ai_state = st.session_state.ai_state
+
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Harassment Detection AI", layout="wide")
 
@@ -66,45 +82,50 @@ def video_frame_callback(frame):
     img = cv2.flip(img, 1)
     h, w = img.shape[:2]
     
-    # Inference
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
     
-    if pose_engine:
-        try:
-            res = pose_engine.detect(mp_img)
-            if res and res.pose_landmarks:
-                for lms in res.pose_landmarks:
-                    # High Visibility Skeleton
-                    conns = [(11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23), (12, 24), (23, 24)]
-                    for s, e in conns:
-                        # Safety check for index existence
-                        if s < len(lms) and e < len(lms):
-                            p1 = (int(lms[s].x*w), int(lms[s].y*h))
-                            p2 = (int(lms[e].x*w), int(lms[e].y*h))
-                            cv2.line(img, p1, p2, (0, 255, 0), 4) # Reduced thickness for cleaner look
-                    
-                    # Draw pose landmarks as small circles
-                    for pt in lms:
-                        cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 4, (0, 255, 0), -1)
-                        
-                    # Face circle (nose)
-                    if len(lms) > 0:
-                        cv2.circle(img, (int(lms[0].x*w), int(lms[0].y*h)), 10, (0, 255, 0), -1)
-        except Exception as e:
-            cv2.putText(img, f"Pose Error: {str(e)[:20]}", (25, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+    # --- ASYNC INFERENCE LOGIC ---
+    # Try to grab the lock. If AI is busy, we SKIP inference and just draw the PREVIOUS results.
+    # THIS PREVENTS STALLING THE STREAM.
+    if not ai_state.processing:
+        def run_inference():
+            ai_state.processing = True
+            try:
+                if pose_engine:
+                    ai_state.pose_results = pose_engine.detect(mp_img)
+                if hand_engine:
+                    ai_state.hand_results = hand_engine.detect(mp_img)
+            except Exception:
+                pass
+            finally:
+                ai_state.processing = False
+        
+        # Start inference in a background thread if it's not already running
+        threading.Thread(target=run_inference, daemon=True).start()
 
-    if hand_engine:
-        try:
-            hres = hand_engine.detect(mp_img)
-            if hres and hres.hand_landmarks:
-                for hlms in hres.hand_landmarks:
-                    for pt in hlms:
-                        cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 5, (255, 255, 255), -1)
-        except Exception as e:
-            cv2.putText(img, f"Hand Error: {str(e)[:20]}", (25, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+    # --- DRAWING (USING LATEST KNOWN RESULTS) ---
+    with ai_state.lock:
+        pres = ai_state.pose_results
+        hres = ai_state.hand_results
 
-    cv2.putText(img, "AI ACTIVE", (25, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+    if pres and pres.pose_landmarks:
+        for lms in pres.pose_landmarks:
+            conns = [(11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23), (12, 24), (23, 24)]
+            for s, e in conns:
+                if s < len(lms) and e < len(lms):
+                    p1 = (int(lms[s].x*w), int(lms[s].y*h))
+                    p2 = (int(lms[e].x*w), int(lms[e].y*h))
+                    cv2.line(img, p1, p2, (0, 255, 0), 4)
+            for pt in lms:
+                cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 4, (0, 255, 0), -1)
+
+    if hres and hres.hand_landmarks:
+        for hlms in hres.hand_landmarks:
+            for pt in hlms:
+                cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 5, (255, 255, 255), -1)
+
+    cv2.putText(img, "AI ACTIVE (ASYNC)", (25, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
     
     return av.VideoFrame.from_ndarray(img, format="bgr24")
 
@@ -132,10 +153,17 @@ RTC_CONFIG = RTCConfiguration(
 )
 
 webrtc_streamer(
-    key="harassment-detection-v12-fast-stable",
+    key="harassment-detection-glitch-proof-v1",
     mode=WebRtcMode.SENDRECV,
     video_frame_callback=video_frame_callback,
     rtc_configuration=RTC_CONFIG,
-    media_stream_constraints={"video": True, "audio": False},
+    media_stream_constraints={
+        "video": {
+            "width": {"ideal": 640},
+            "height": {"ideal": 480},
+            "frameRate": {"ideal": 15}
+        },
+        "audio": False
+    },
     async_processing=True,
 )
