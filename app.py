@@ -7,6 +7,9 @@ import os
 import av
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+import threading
+import time
+import urllib.request
 
 import threading
 import time
@@ -198,8 +201,8 @@ st.info("💡 If camera doesn't appear: Refresh page → Check browser permissio
 
 try:
     webrtc_streamer(
-        key="harassment-detection-v104",
-        mode=WebRtcMode.RECVONLY,
+        key="harassment-detection-v105",
+        mode=WebRtcMode.SENDRECV,
         video_frame_callback=video_frame_callback,
         rtc_configuration=RTC_CONFIG,
         media_stream_constraints={"video": True, "audio": False},
