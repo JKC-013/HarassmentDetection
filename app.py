@@ -111,18 +111,14 @@ st.divider()
 # Create tabs for Live and Photo modes
 tab1, tab2 = st.tabs(["📹 Live Camera", "📷 Photo Analysis"])
 
-# WebRTC Config - use defaults (no explicit STUN/TURN)
-rtc_config = None
-
 # Camera frame callback
 def video_frame_callback(frame):
-    """Process video frame."""
+    """Process video frame - keep as minimal as possible."""
     try:
         img = frame.to_ndarray(format="bgr24")
-        img = cv2.flip(img, 1)  # Mirror
-        return av.VideoFrame.from_ndarray(img, format="bgr24")
-    except Exception as e:
-        print(f"Frame error: {e}")
+        # Just flip and return - no other processing
+        return av.VideoFrame.from_ndarray(cv2.flip(img, 1), format="bgr24")
+    except Exception:
         return frame
 
 # TAB 1: Live Camera (WebRTC)
@@ -130,14 +126,24 @@ with tab1:
     st.subheader("📹 Live Camera Feed")
     st.write("Real-time pose and hand detection")
     
+    # RTC Config - explicitly empty to use browser defaults
+    try:
+        rtc_config_live = RTCConfiguration({"iceServers": []})
+    except Exception:
+        rtc_config_live = None
+    
     try:
         webrtc_streamer(
-            key="harassment-detection",
-            mode=WebRtcMode.SENDRECV,
+            key="harassment-detection-live",
+            mode=WebRtcMode.RECVONLY,  # Simpler mode: receive only
             video_frame_callback=video_frame_callback,
-            rtc_configuration=rtc_config,
-            media_stream_constraints={"video": True, "audio": False},
+            rtc_configuration=rtc_config_live,
+            media_stream_constraints={
+                "video": {"width": {"max": 640}, "height": {"max": 480}},
+                "audio": False
+            },
             async_processing=False,
+            webrtc_connection_timeout=30,  # Increase timeout
         )
     except Exception as e:
         st.error(f"❌ Live Camera Error: {str(e)}")
