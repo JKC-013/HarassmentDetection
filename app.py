@@ -168,18 +168,27 @@ st.sidebar.info("""
 - Check browser console (F12)
 """)
 
-# Multiple STUN servers for better ICE candidate gathering
-# Using well-known public STUN servers
+# RTC Configuration with multiple STUN and TURN servers
+# TURN servers are more reliable than STUN in restricted environments like HF Spaces
 try:
     RTC_CONFIG = RTCConfiguration({
         "iceServers": [
             {"urls": ["stun:stun.l.google.com:19302"]},
             {"urls": ["stun:stun1.l.google.com:19302"]},
-            {"urls": ["stun:stun2.l.google.com:19302"]},
-            {"urls": ["stun:stun3.l.google.com:19302"]},
+            {
+                "urls": ["turn:openrelay.metered.ca:80"],
+                "username": "openrelayproject",
+                "credential": "openrelayproject"
+            },
+            {
+                "urls": ["turn:openrelay.metered.ca:443"],
+                "username": "openrelayproject",
+                "credential": "openrelayproject"
+            }
         ]
     })
-except Exception:
+except Exception as e:
+    print(f"RTC config error: {e}")
     RTC_CONFIG = None
 
 st.write("---")
