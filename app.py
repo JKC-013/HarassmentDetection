@@ -217,21 +217,30 @@ with tab3:
     ✅ More reliable than WebRTC
     """)
     
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("### Local Testing")
-        st.code("python stream_server.py", language="bash")
-        st.write("Then visit: http://localhost:5000")
+    # Determine if we're on Render deployment or local
+    is_render = "onrender.com" in st.session_state.get("url", "")
     
-    with col2:
-        st.markdown("### On Render")
-        st.write("Visit: `https://your-render-app.onrender.com:5000`")
+    if is_render:
+        flask_url = st.session_state.get("flask_url", "https://harassment-detection-flask.onrender.com")
+        st.success(f"✅ Flask server running at: `{flask_url}`")
+        st.write(f"[Open Flask Stream →]({flask_url})")
+        st.components.v1.html(f'<iframe src="{flask_url}" width="100%" height="600px"></iframe>', height=600)
+    else:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("### 🔧 Local Testing")
+            st.code("python stream_server.py", language="bash")
+            st.write("Then visit: [http://localhost:5000](http://localhost:5000)")
+        
+        with col2:
+            st.markdown("### 🚀 On Render")
+            st.write("Flask deployed at:")
+            st.code("https://harassment-detection-flask.onrender.com", language="bash")
     
     st.divider()
     st.markdown("""
-    **Status:** 🔄 Experimental (under development)
+    **Status:** 🟢 Ready for deployment
     
-    This is a new server-side streaming implementation that should work reliably for everyone.
-    Run `stream_server.py` to test locally!
+    Deployed on Render as separate service: `harassment-detection-flask`
     """)
 

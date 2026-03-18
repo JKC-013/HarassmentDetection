@@ -3,4 +3,5 @@ streamlit-webrtc>=0.47.0
 mediapipe>=0.10.0
 opencv-python>=4.8.0
 flask>=3.0.0
+gunicorn>=21.0.0
 
