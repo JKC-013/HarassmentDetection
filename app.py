@@ -108,8 +108,8 @@ with st.sidebar:
 # Main content
 st.divider()
 
-# Create tabs for Live and Photo modes
-tab1, tab2 = st.tabs(["📹 Live Camera", "📷 Photo Analysis"])
+# Create tabs for different modes
+tab1, tab2, tab3 = st.tabs(["📹 Live Camera (WebRTC)", "📷 Photo Analysis", "🖥️ Server Streaming"])
 
 # Camera frame callback
 def video_frame_callback(frame):
@@ -200,4 +200,38 @@ with tab2:
                 st.warning("⏳ Models still loading...")
         except Exception as e:
             st.error(f"Detection error: {e}")
+
+# TAB 3: Server-side Streaming (EXPERIMENTAL)
+with tab3:
+    st.subheader("🖥️ Server-Side Real-Time Streaming")
+    st.write("Uses Flask + OpenCV for server-side processing (works across networks!)")
+    
+    st.info("""
+    **How it works:**
+    1. Server captures camera frames
+    2. Server processes with MediaPipe
+    3. Server streams annotated video to browser
+    
+    ✅ Works across networks (no P2P issues)
+    ✅ Works for remote users
+    ✅ More reliable than WebRTC
+    """)
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("### Local Testing")
+        st.code("python stream_server.py", language="bash")
+        st.write("Then visit: http://localhost:5000")
+    
+    with col2:
+        st.markdown("### On Render")
+        st.write("Visit: `https://your-render-app.onrender.com:5000`")
+    
+    st.divider()
+    st.markdown("""
+    **Status:** 🔄 Experimental (under development)
+    
+    This is a new server-side streaming implementation that should work reliably for everyone.
+    Run `stream_server.py` to test locally!
+    """)
 
