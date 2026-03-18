@@ -2,7 +2,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, RTCConfiguration, VideoFrameCallback, WebRtcMode
+from streamlit_webrtc import webrtc_streamer, RTCConfiguration, WebRtcMode
 import os
 import av
 from mediapipe.tasks import python
@@ -59,7 +59,7 @@ pose_engine, hand_engine, engine_status = load_mediapipe_engines()
 
 # --- CALLBACK FUNCTION ---
 
-def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
+def video_frame_callback(frame):
     img = frame.to_ndarray(format="bgr24")
     
     # Mirror for natural view
