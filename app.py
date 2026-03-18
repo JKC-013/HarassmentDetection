@@ -10,6 +10,22 @@ from mediapipe.tasks.python import vision
 
 import threading
 import time
+import urllib.request
+
+# --- MODEL DOWNLOAD HELPER ---
+def download_model_if_missing(model_name, url):
+    """Download MediaPipe model if not present locally."""
+    if os.path.exists(model_name):
+        return model_name
+    
+    try:
+        print(f"Downloading {model_name}...")
+        urllib.request.urlretrieve(url, model_name)
+        print(f"✅ Downloaded {model_name}")
+        return model_name
+    except Exception as e:
+        print(f"❌ Failed to download {model_name}: {e}")
+        return None
 
 # --- SHARED STATE FOR ASYNC AI (GLOBAL FOR THREAD-SAFE ACCESS) ---
 class GlobalAIState:
@@ -34,6 +50,13 @@ st.markdown("If the camera 'spins' and closes, please try refreshing or checking
 
 @st.cache_resource
 def load_mediapipe_engines():
+    # Download models if missing
+    pose_url = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full.tflite"
+    hand_url = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker.task"
+    
+    pose_file = download_model_if_missing("pose_landmarker.task", pose_url)
+    hand_file = download_model_if_missing("hand_landmarker.task", hand_url)
+    
     # Use ABSOLUTE paths for Docker stability, fallback to local for dev
     p_path = '/app/pose_landmarker.task' if os.path.exists('/app/pose_landmarker.task') else 'pose_landmarker.task'
     h_path = '/app/hand_landmarker.task' if os.path.exists('/app/hand_landmarker.task') else 'hand_landmarker.task'
