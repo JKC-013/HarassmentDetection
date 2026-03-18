@@ -126,13 +126,18 @@ def video_frame_callback(frame):
         img = cv2.flip(img, 1)
         h, w = img.shape[:2]
         
+        # If models aren't loaded, just return the frame without processing
+        if pose_engine is None and hand_engine is None:
+            cv2.putText(img, "Waiting for models to load...", (25, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 165, 255), 2)
+            return av.VideoFrame.from_ndarray(img, format="bgr24")
+        
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
         
         # --- ASYNC INFERENCE LOGIC ---
         # Try to grab the lock. If AI is busy, we SKIP inference and just draw the PREVIOUS results.
         # THIS PREVENTS STALLING THE STREAM.
-        if not ai_state.processing:
+        if not ai_state.processing and (pose_engine is not None or hand_engine is not None):
             def run_inference():
                 ai_state.processing = True
                 try:
@@ -153,7 +158,7 @@ def video_frame_callback(frame):
             pres = ai_state.pose_results
             hres = ai_state.hand_results
 
-        if pres and pres.pose_landmarks:
+        if pres and pres.pose_landmarks and pose_engine is not None:
             for lms in pres.pose_landmarks:
                 conns = [(11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23), (12, 24), (23, 24)]
                 for s, e in conns:
@@ -164,16 +169,20 @@ def video_frame_callback(frame):
                 for pt in lms:
                     cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 4, (0, 255, 0), -1)
 
-        if hres and hres.hand_landmarks:
+        if hres and hres.hand_landmarks and hand_engine is not None:
             for hlms in hres.hand_landmarks:
                 for pt in hlms:
                     cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 5, (255, 255, 255), -1)
 
-        cv2.putText(img, "AI ACTIVE (ASYNC)", (25, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+        status_text = "AI ACTIVE" if (pose_engine is not None or hand_engine is not None) else "Models Loading..."
+        status_color = (0, 255, 0) if (pose_engine is not None or hand_engine is not None) else (0, 165, 255)
+        cv2.putText(img, status_text, (25, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, status_color, 2)
         
         return av.VideoFrame.from_ndarray(img, format="bgr24")
     except Exception as e:
-        print(f"Frame processing error: {e}")
+        print(f"❌ Frame processing error: {e}")
+        import traceback
+        traceback.print_exc()
         # Return the frame even if processing fails to prevent stream from breaking
         return frame
 
