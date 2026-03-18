@@ -74,56 +74,80 @@ def load_models():
 def capture_frames():
     """Capture and process frames from camera."""
     cap = cv2.VideoCapture(0)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    cap.set(cv2.CAP_PROP_FPS, 20)
+    
+    # Check if camera is available
+    if not cap.isOpened():
+        print("⚠️  No camera found - using demo mode")
+        demo_mode = True
+    else:
+        demo_mode = False
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        cap.set(cv2.CAP_PROP_FPS, 20)
+        print("✅ Camera opened")
     
     state.running = True
     frame_count = 0
     
     while state.running:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        
-        frame = cv2.flip(frame, 1)  # Mirror
-        h, w = frame.shape[:2]
-        
-        # Run MediaPipe detection
         try:
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
-            
-            # Pose detection
-            if state.pose_engine is not None:
-                pose_result = state.pose_engine.detect(mp_img)
-                if pose_result.pose_landmarks:
-                    for lms in pose_result.pose_landmarks:
-                        # Draw skeleton
-                        conns = [(11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23), (12, 24), (23, 24)]
-                        for s, e in conns:
-                            if s < len(lms) and e < len(lms):
-                                p1 = (int(lms[s].x*w), int(lms[s].y*h))
-                                p2 = (int(lms[e].x*w), int(lms[e].y*h))
-                                cv2.line(frame, p1, p2, (0, 255, 0), 2)
-                        # Draw joints
-                        for pt in lms:
-                            cv2.circle(frame, (int(pt.x*w), int(pt.y*h)), 3, (0, 255, 0), -1)
-            
-            # Hand detection
-            if state.hand_engine is not None:
-                hand_result = state.hand_engine.detect(mp_img)
-                if hand_result.hand_landmarks:
-                    for hlms in hand_result.hand_landmarks:
-                        for pt in hlms:
-                            cv2.circle(frame, (int(pt.x*w), int(pt.y*h)), 3, (255, 255, 255), -1)
-        except Exception as e:
-            print(f"Detection error: {e}")
+            if demo_mode:
+                # Create a demo frame with text
+                frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(frame, "DEMO MODE", (150, 100), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 0), 3)
+                cv2.putText(frame, "No camera available on server", (80, 200), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                cv2.putText(frame, "This works on your local machine!", (100, 300), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+                cv2.putText(frame, f"Frame: {frame_count}", (200, 400), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+                frame_count += 1
+            else:
+                ret, frame = cap.read()
+                if not ret:
+                    print("⚠️  Camera read failed - falling back to demo")
+                    demo_mode = True
+                    cap.release()
+                    continue
+                
+                frame = cv2.flip(frame, 1)  # Mirror
+                h, w = frame.shape[:2]
+                
+                # Run MediaPipe detection
+                try:
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+                    
+                    # Pose detection
+                    if state.pose_engine is not None:
+                        pose_result = state.pose_engine.detect(mp_img)
+                        if pose_result.pose_landmarks:
+                            for lms in pose_result.pose_landmarks:
+                                # Draw skeleton
+                                conns = [(11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23), (12, 24), (23, 24)]
+                                for s, e in conns:
+                                    if s < len(lms) and e < len(lms):
+                                        p1 = (int(lms[s].x*w), int(lms[s].y*h))
+                                        p2 = (int(lms[e].x*w), int(lms[e].y*h))
+                                        cv2.line(frame, p1, p2, (0, 255, 0), 2)
+                                # Draw joints
+                                for pt in lms:
+                                    cv2.circle(frame, (int(pt.x*w), int(pt.y*h)), 3, (0, 255, 0), -1)
+                    
+                    # Hand detection
+                    if state.hand_engine is not None:
+                        hand_result = state.hand_engine.detect(mp_img)
+                        if hand_result.hand_landmarks:
+                            for hlms in hand_result.hand_landmarks:
+                                for pt in hlms:
+                                    cv2.circle(frame, (int(pt.x*w), int(pt.y*h)), 3, (255, 255, 255), -1)
+                except Exception as e:
+                    print(f"Detection error: {e}")
+                
+                frame_count += 1
+                if frame_count % 30 == 0:
+                    print(f"Streaming... ({frame_count} frames)")
         
-        # Add FPS counter
-        frame_count += 1
-        if frame_count % 30 == 0:
-            print(f"Streaming... ({frame_count} frames)")
+        except Exception as e:
+            print(f"Capture error: {e}")
+            break
         
         # Store frame
         with state.lock:
