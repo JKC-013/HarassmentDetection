@@ -109,10 +109,19 @@ st.divider()
 # Create tabs for different modes
 tab1, tab2 = st.tabs(["📷 Photo Analysis", "🖥️ Server Streaming"])
 
-# TAB 1: Photo-based Analysis (Fallback)
+# TAB 1: Photo-based Analysis
 with tab1:
-    st.subheader("📷 Photo-Based Detection")
-    st.write("Take a photo and see instant detection results")
+    st.subheader("📷 Photo-Based Detection - RECOMMENDED FOR SHARING")
+    st.write("Take a photo and see instant pose + hand detection")
+    
+    st.success("""
+    ✅ **Works for everyone** - no special setup needed
+    ✅ **Works on any device** - phone, tablet, computer
+    ✅ **Works on Render** - no server limitations
+    ✅ **Quick and reliable** - instant results
+    
+    👉 **Share this app link with friends** - they can use this feature immediately!
+    """)
     
     picture = st.camera_input("Take a picture")
     
@@ -161,33 +170,40 @@ with tab1:
         except Exception as e:
             st.error(f"Detection error: {e}")
 
-# TAB 2: Server-side Streaming
+# TAB 2: Server-side Streaming (Optional)
 with tab2:
-    st.subheader("🖥️ Server-Side Real-Time Streaming")
-    st.write("Uses Flask + OpenCV for server-side processing (works across networks!)")
+    st.subheader("🖥️ Server-Side Real-Time Streaming (Optional)")
+    st.write("Advanced: Run Flask locally for real-time streaming with server-side processing")
     
-    st.info("""
-    **How it works:**
-    1. Server captures camera frames
-    2. Server processes with MediaPipe
-    3. Server streams annotated video to browser
+    st.warning("""
+    **Note:** This works best on your LOCAL machine where you have a camera.
     
-    ✅ Works across networks (no P2P issues)
-    ✅ Works for remote users
-    ✅ More reliable than WebRTC
+    On Render (this server), there's no camera hardware available.
     """)
     
-    # Determine if we're on Render deployment or local
-    flask_url = "https://harassmentdetection-flask.onrender.com"
+    st.info("""
+    **For Real-Time Streaming:**
+    1. Run locally: `python stream_server.py`
+    2. Visit: `http://localhost:5000`
+    3. Share with friends using **ngrok tunnel**:
+       ```bash
+       ngrok http 5000
+       ```
+    """)
     
-    st.success(f"✅ Flask server running at: `{flask_url}`")
-    st.write(f"[Open Flask Stream →]({flask_url})")
-    st.components.v1.html(f'<iframe src="{flask_url}" width="100%" height="600px"></iframe>', height=600)
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("### 🔧 Local Testing")
+        st.code("python stream_server.py", language="bash")
+        st.write("Then visit: [http://localhost:5000](http://localhost:5000)")
+    
+    with col2:
+        st.markdown("### 🌐 Share with Friends")
+        st.write("Use **ngrok** to tunnel your local Flask server:")
+        st.code("ngrok http 5000", language="bash")
     
     st.divider()
     st.markdown("""
-    **Status:** 🟢 Ready for deployment
-    
-    Deployed on Render as separate service: `harassment-detection-flask`
+    **Best Practice:** For remote users, use **Tab 1 (Photo Analysis)** instead - it works reliably everywhere! 📷
     """)
 
