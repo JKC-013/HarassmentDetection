@@ -188,7 +188,9 @@ def video_frame_callback(frame):
 
 # --- APP UI ---
 
-st.sidebar.title("AI Detection Dashboard")
+st.sidebar.title("🤖 AI Detection Dashboard")
+st.sidebar.subheader("Model Status")
+
 for msg in engine_status:
     if "✅" in msg:
         st.sidebar.success(msg)
@@ -197,17 +199,28 @@ for msg in engine_status:
     else:
         st.sidebar.warning(msg)
 
-st.sidebar.markdown("---")
-st.sidebar.info("🎥 Camera Status: Ready")
-st.sidebar.markdown("""
-**Browser Compatibility:**
-- ✅ Chrome/Edge (Recommended)
-- ✅ Firefox
-- ⚠️ Safari (Limited support)
+# Show current state
+if pose_engine is not None:
+    st.sidebar.write("✅ **Pose Detection:** Ready")
+else:
+    st.sidebar.write("⏳ **Pose Detection:** Waiting for model file")
+    
+if hand_engine is not None:
+    st.sidebar.write("✅ **Hand Detection:** Ready")
+else:
+    st.sidebar.write("⏳ **Hand Detection:** Waiting for model file")
 
-**Permissions Needed:**
-1. Allow camera access when prompted
-2. Check browser privacy settings
+st.sidebar.markdown("---")
+st.sidebar.info("""
+🎥 **Camera Instructions:**
+1. Click START button
+2. Allow camera permission
+3. Grant browser access when prompted
+
+❌ **If camera doesn't appear:**
+- Refresh page (Ctrl+R)
+- Try Chrome/Firefox
+- Check browser console (F12)
 """)
 
 # Minimal RTC Configuration - sometimes less is more with WebRTC
