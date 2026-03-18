@@ -76,58 +76,63 @@ pose_engine, hand_engine, engine_status = load_mediapipe_engines()
 # --- CALLBACK FUNCTION ---
 
 def video_frame_callback(frame):
-    img = frame.to_ndarray(format="bgr24")
-    
-    # Mirror for natural view
-    img = cv2.flip(img, 1)
-    h, w = img.shape[:2]
-    
-    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
-    
-    # --- ASYNC INFERENCE LOGIC ---
-    # Try to grab the lock. If AI is busy, we SKIP inference and just draw the PREVIOUS results.
-    # THIS PREVENTS STALLING THE STREAM.
-    if not ai_state.processing:
-        def run_inference():
-            ai_state.processing = True
-            try:
-                if pose_engine:
-                    ai_state.pose_results = pose_engine.detect(mp_img)
-                if hand_engine:
-                    ai_state.hand_results = hand_engine.detect(mp_img)
-            except Exception:
-                pass
-            finally:
-                ai_state.processing = False
+    try:
+        img = frame.to_ndarray(format="bgr24")
         
-        # Start inference in a background thread if it's not already running
-        threading.Thread(target=run_inference, daemon=True).start()
+        # Mirror for natural view
+        img = cv2.flip(img, 1)
+        h, w = img.shape[:2]
+        
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
+        
+        # --- ASYNC INFERENCE LOGIC ---
+        # Try to grab the lock. If AI is busy, we SKIP inference and just draw the PREVIOUS results.
+        # THIS PREVENTS STALLING THE STREAM.
+        if not ai_state.processing:
+            def run_inference():
+                ai_state.processing = True
+                try:
+                    if pose_engine:
+                        ai_state.pose_results = pose_engine.detect(mp_img)
+                    if hand_engine:
+                        ai_state.hand_results = hand_engine.detect(mp_img)
+                except Exception as e:
+                    print(f"Inference error: {e}")
+                finally:
+                    ai_state.processing = False
+            
+            # Start inference in a background thread if it's not already running
+            threading.Thread(target=run_inference, daemon=True).start()
 
-    # --- DRAWING (USING LATEST KNOWN RESULTS) ---
-    with ai_state.lock:
-        pres = ai_state.pose_results
-        hres = ai_state.hand_results
+        # --- DRAWING (USING LATEST KNOWN RESULTS) ---
+        with ai_state.lock:
+            pres = ai_state.pose_results
+            hres = ai_state.hand_results
 
-    if pres and pres.pose_landmarks:
-        for lms in pres.pose_landmarks:
-            conns = [(11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23), (12, 24), (23, 24)]
-            for s, e in conns:
-                if s < len(lms) and e < len(lms):
-                    p1 = (int(lms[s].x*w), int(lms[s].y*h))
-                    p2 = (int(lms[e].x*w), int(lms[e].y*h))
-                    cv2.line(img, p1, p2, (0, 255, 0), 4)
-            for pt in lms:
-                cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 4, (0, 255, 0), -1)
+        if pres and pres.pose_landmarks:
+            for lms in pres.pose_landmarks:
+                conns = [(11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23), (12, 24), (23, 24)]
+                for s, e in conns:
+                    if s < len(lms) and e < len(lms):
+                        p1 = (int(lms[s].x*w), int(lms[s].y*h))
+                        p2 = (int(lms[e].x*w), int(lms[e].y*h))
+                        cv2.line(img, p1, p2, (0, 255, 0), 4)
+                for pt in lms:
+                    cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 4, (0, 255, 0), -1)
 
-    if hres and hres.hand_landmarks:
-        for hlms in hres.hand_landmarks:
-            for pt in hlms:
-                cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 5, (255, 255, 255), -1)
+        if hres and hres.hand_landmarks:
+            for hlms in hres.hand_landmarks:
+                for pt in hlms:
+                    cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 5, (255, 255, 255), -1)
 
-    cv2.putText(img, "AI ACTIVE (ASYNC)", (25, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-    
-    return av.VideoFrame.from_ndarray(img, format="bgr24")
+        cv2.putText(img, "AI ACTIVE (ASYNC)", (25, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+        
+        return av.VideoFrame.from_ndarray(img, format="bgr24")
+    except Exception as e:
+        print(f"Frame processing error: {e}")
+        # Return the frame even if processing fails to prevent stream from breaking
+        return frame
 
 # --- APP UI ---
 
