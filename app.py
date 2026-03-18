@@ -189,27 +189,34 @@ for msg in engine_status:
         st.sidebar.warning(msg)
 
 st.sidebar.markdown("---")
-st.sidebar.info("Status: Tracking Active")
+st.sidebar.info("🎥 Camera Status: Ready")
 st.sidebar.markdown("""
-- **Person Detection**: Green Lines
-- **Hand Landmarks**: White Dots
+**Browser Compatibility:**
+- ✅ Chrome/Edge (Recommended)
+- ✅ Firefox
+- ⚠️ Safari (Limited support)
+
+**Permissions Needed:**
+1. Allow camera access when prompted
+2. Check browser privacy settings
 """)
 
-# Improved RTC Configuration with multiple STUN servers for redundancy
-RTC_CONFIG = RTCConfiguration(
-    {
-        "iceServers": [
-            {"urls": ["stun:stun.l.google.com:19302"]},
-            {"urls": ["stun:stun1.l.google.com:19302"]},
-            {"urls": ["stun:stun2.l.google.com:19302"]},
-        ]
-    }
-)
+# Minimal RTC Configuration - sometimes less is more with WebRTC
+# Using empty config to rely on direct connection
+try:
+    RTC_CONFIG = RTCConfiguration({"iceServers": []})
+except:
+    RTC_CONFIG = None
 
-# Final Glitch-Proof Configuration
+# Simplest possible WebRTC configuration
+st.write("---")
+st.subheader("📹 Live Camera Feed")
+st.write("Click START below, grant camera permission, and the feed should appear.")
+st.info("💡 If camera doesn't appear: Refresh page → Check browser permissions → Check browser console (F12)")
+
 try:
     webrtc_streamer(
-        key="harassment-detection-stable-v101",
+        key="harassment-detection-v102",  # Changed key to force refresh
         mode=WebRtcMode.SENDRECV,
         video_frame_callback=video_frame_callback,
         rtc_configuration=RTC_CONFIG,
@@ -223,7 +230,15 @@ try:
         },
         async_processing=True,
     )
-except Exception as e:
-    st.error(f"WebRTC Error: {str(e)}")
-    st.info("Please refresh the page and try again.")
+except Exception as webrtc_error:
+    st.error(f"❌ WebRTC Connection Error")
+    st.error(str(webrtc_error))
+    st.warning("""
+    **Troubleshooting Steps:**
+    1. Click your browser's refresh button
+    2. Make sure you granted camera permission
+    3. Try a different browser (Chrome/Firefox work best)
+    4. Check browser console (F12 → Console tab) for detailed errors
+    5. Check your firewall/VPN settings
+    """)
 
