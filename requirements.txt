@@ -1,5 +1,5 @@
 streamlit
-streamlit-webrtc==0.47.9
+streamlit-webrtc>=0.47.0
 mediapipe
 opencv-python
 huggingface_hub

@@ -189,14 +189,11 @@ st.info("💡 If camera doesn't appear: Refresh page → Check browser permissio
 
 try:
     webrtc_streamer(
-        key="harassment-detection-v103",
-        mode=WebRtcMode.SENDRECV,
+        key="harassment-detection-v104",
+        mode=WebRtcMode.RECVONLY,
         video_frame_callback=video_frame_callback,
         rtc_configuration=RTC_CONFIG,
-        media_stream_constraints={
-            "video": {"width": {"ideal": 640}, "height": {"ideal": 480}},
-            "audio": False
-        },
+        media_stream_constraints={"video": True, "audio": False},
         async_processing=False,
     )
 except Exception as webrtc_error:
