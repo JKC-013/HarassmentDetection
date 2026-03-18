@@ -16,15 +16,21 @@ import urllib.request
 def download_model_if_missing(model_name, url):
     """Download MediaPipe model if not present locally."""
     if os.path.exists(model_name):
+        print(f"✅ {model_name} already exists")
         return model_name
     
     try:
-        print(f"Downloading {model_name}...")
+        print(f"📥 Downloading {model_name} from {url}...")
         urllib.request.urlretrieve(url, model_name)
-        print(f"✅ Downloaded {model_name}")
-        return model_name
+        if os.path.exists(model_name):
+            size = os.path.getsize(model_name) / (1024*1024)  # Size in MB
+            print(f"✅ Downloaded {model_name} ({size:.1f} MB)")
+            return model_name
+        else:
+            print(f"❌ Download failed: File not created")
+            return None
     except Exception as e:
-        print(f"❌ Failed to download {model_name}: {e}")
+        print(f"❌ Failed to download {model_name}: {str(e)}")
         return None
 
 # --- SHARED STATE FOR ASYNC AI (GLOBAL FOR THREAD-SAFE ACCESS) ---
@@ -54,6 +60,7 @@ def load_mediapipe_engines():
     pose_url = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full.tflite"
     hand_url = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker.task"
     
+    print("🔄 Starting model loading...")
     pose_file = download_model_if_missing("pose_landmarker.task", pose_url)
     hand_file = download_model_if_missing("hand_landmarker.task", hand_url)
     
@@ -66,7 +73,9 @@ def load_mediapipe_engines():
     status_msg = []
     
     try:
+        print(f"Checking for pose model at: {p_path}")
         if os.path.exists(p_path):
+            print(f"Loading pose model...")
             options = vision.PoseLandmarkerOptions(
                 base_options=python.BaseOptions(model_asset_path=p_path),
                 running_mode=vision.RunningMode.IMAGE,
@@ -74,10 +83,14 @@ def load_mediapipe_engines():
             )
             pose_engine = vision.PoseLandmarker.create_from_options(options)
             status_msg.append("✅ Pose Engine Loaded")
+            print("✅ Pose engine loaded successfully")
         else:
             status_msg.append(f"❌ Pose Model Missing at {p_path}")
+            print(f"❌ Pose model not found at {p_path}")
             
+        print(f"Checking for hand model at: {h_path}")
         if os.path.exists(h_path):
+            print(f"Loading hand model...")
             options = vision.HandLandmarkerOptions(
                 base_options=python.BaseOptions(model_asset_path=h_path),
                 running_mode=vision.RunningMode.IMAGE,
@@ -85,16 +98,23 @@ def load_mediapipe_engines():
             )
             hand_engine = vision.HandLandmarker.create_from_options(options)
             status_msg.append("✅ Hand Engine Loaded")
+            print("✅ Hand engine loaded successfully")
         else:
             status_msg.append(f"❌ Hand Model Missing at {h_path}")
+            print(f"❌ Hand model not found at {h_path}")
             
     except Exception as e:
         status_msg.append(f"⚠️ Engine Error: {str(e)}")
+        print(f"⚠️ Engine loading error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         
     return pose_engine, hand_engine, status_msg
 
 # Pre-load models so user sees status immediately
+print("📦 Pre-loading MediaPipe models...")
 pose_engine, hand_engine, engine_status = load_mediapipe_engines()
+print(f"Model loading complete. Pose: {pose_engine is not None}, Hand: {hand_engine is not None}")
 
 # --- CALLBACK FUNCTION ---
 
