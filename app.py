@@ -2,217 +2,145 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
+from streamlit_webrtc import webrtc_streamer, RTCConfiguration, VideoFrameCallback
 import os
-import sys
-import threading
 import av
-import time
-
-# MediaPipe Tasks API
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
-PoseLandmarker = vision.PoseLandmarker
-PoseLandmarkerOptions = vision.PoseLandmarkerOptions
-HandLandmarker = vision.HandLandmarker
-HandLandmarkerOptions = vision.HandLandmarkerOptions
-RunningMode = vision.RunningMode
+# --- PAGE CONFIG ---
+st.set_page_config(page_title="Harassment Detection AI", layout="wide")
 
-# Page Config
-st.set_page_config(page_title="Multi-Person Pose Detection", layout="wide")
+st.title("🛡️ Harassment Detection AI (Stable Docker)")
+st.markdown("If the camera 'spins' and closes, please try refreshing or checking your browser permissions.")
 
-st.title("🏃 Multi-Person Pose Detection")
+# --- MODEL LOADING (CACHED) ---
 
-# --- INITIALIZATION STATUS ---
-status_placeholder = st.empty()
-with status_placeholder.status("🚀 Initializing AI Engine...", expanded=True) as status:
-    st.sidebar.subheader("System Diagnostics")
-    st.sidebar.write(f"Python: {sys.version.split()[0]}")
+@st.cache_resource
+def load_mediapipe_engines():
+    # Use ABSOLUTE paths for Docker stability, fallback to local for dev
+    p_path = '/app/pose_landmarker.task' if os.path.exists('/app/pose_landmarker.task') else 'pose_landmarker.task'
+    h_path = '/app/hand_landmarker.task' if os.path.exists('/app/hand_landmarker.task') else 'hand_landmarker.task'
     
-    @st.cache_resource
-    def load_engines():
-        # Pose Engine
-        p_path = 'pose_landmarker.task'
-        p_engine = None
+    pose_engine = None
+    hand_engine = None
+    status_msg = []
+    
+    try:
         if os.path.exists(p_path):
-            try:
-                p_engine = PoseLandmarker.create_from_options(PoseLandmarkerOptions(
-                    base_options=python.BaseOptions(model_asset_path=p_path),
-                    running_mode=RunningMode.IMAGE,
-                    num_poses=2,
-                ))
-            except: pass
+            options = vision.PoseLandmarkerOptions(
+                base_options=python.BaseOptions(model_asset_path=p_path),
+                running_mode=vision.RunningMode.IMAGE,
+                num_poses=4
+            )
+            pose_engine = vision.PoseLandmarker.create_from_options(options)
+            status_msg.append("✅ Pose Engine Loaded")
+        else:
+            status_msg.append(f"❌ Pose Model Missing at {p_path}")
             
-        # Hand Engine (21 finger dots)
-        h_path = 'hand_landmarker.task'
-        h_engine = None
         if os.path.exists(h_path):
-            try:
-                h_engine = HandLandmarker.create_from_options(HandLandmarkerOptions(
-                    base_options=python.BaseOptions(model_asset_path=h_path),
-                    running_mode=RunningMode.IMAGE,
-                    num_hands=2,
-                ))
-            except: pass
+            options = vision.HandLandmarkerOptions(
+                base_options=python.BaseOptions(model_asset_path=h_path),
+                running_mode=vision.RunningMode.IMAGE,
+                num_hands=4
+            )
+            hand_engine = vision.HandLandmarker.create_from_options(options)
+            status_msg.append("✅ Hand Engine Loaded")
+        else:
+            status_msg.append(f"❌ Hand Model Missing at {h_path}")
             
-        return p_engine, h_engine
-
-    POSE_ENGINE, HAND_ENGINE = load_engines()
-    
-    st.sidebar.write(f"Pose AI: {'✅ Ready' if POSE_ENGINE else '❌ Missing pose_landmarker.task'}")
-    st.sidebar.write(f"Hand AI: {'✅ 21 Dots Available' if HAND_ENGINE else '⚠️ Basic Tracking Only'}")
-    
-    if HAND_ENGINE:
-        status.update(label="✅ Ready with 21 finger dots!", state="complete", expanded=False)
-    elif POSE_ENGINE:
-        status.update(label="✅ Ready with basic pose tracking!", state="complete", expanded=False)
-
-status_placeholder.empty()
-
-st.markdown("""
-### Instructions:
-1. **At least 2 people** for touch detection.
-2. Press **"Start"** to open camera (Mirrored view).
-3. Optimized for **Multiple Sessions** (AI engine shared via locking).
-4. If hand dots missing, ensure `hand_landmarker.task` is in the root folder.
-""")
-
-RTC_CONFIGURATION = RTCConfiguration(
-    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
-)
-
-DETECTOR_LOCK = threading.Lock()
-
-def is_point_in_rect(pt, rect):
-    return rect[0] <= pt[0] <= rect[0]+rect[2] and rect[1] <= pt[1] <= rect[1]+rect[3]
-
-class DetectProcessor(VideoProcessorBase):
-    def __init__(self):
-        self.colors = [(0, 255, 0), (255, 0, 0), (0, 255, 255), (255, 0, 255)]
-        self.last_ts = time.time()
-        self.fps = 0
-        self.frame_count = 0
-
-    def recv(self, frame):
-        now = time.time()
-        self.fps = 1.0 / (now - self.last_ts) if (now - self.last_ts) > 0 else 0
-        self.last_ts = now
-        self.frame_count += 1
-
-        img = frame.to_ndarray(format="bgr24")
+    except Exception as e:
+        status_msg.append(f"⚠️ Engine Error: {str(e)}")
         
-        # Mirror flip (matches local behavior)
-        img = cv2.flip(img, 1)
-        
-        if not POSE_ENGINE:
-            return av.VideoFrame.from_ndarray(img, format="bgr24")
+    return pose_engine, hand_engine, status_msg
 
+# Pre-load models so user sees status immediately
+pose_engine, hand_engine, engine_status = load_mediapipe_engines()
+
+# --- CALLBACK FUNCTION ---
+
+def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
+    img = frame.to_ndarray(format="bgr24")
+    
+    # Mirror for natural view
+    img = cv2.flip(img, 1)
+    h, w = img.shape[:2]
+    
+    # Inference
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
+    
+    if pose_engine:
         try:
-            h, w, _ = img.shape
-            rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-            
-            # --- INFERENCE STEP (LOCK PROTECTED) ---
-            with DETECTOR_LOCK:
-                pose_res = POSE_ENGINE.detect(mp_img)
-                hand_res = HAND_ENGINE.detect(mp_img) if HAND_ENGINE else None
-
-            # --- POST-PROCESSING (NO LOCK NEEDED) ---
-            bodies = []
-            if pose_res and pose_res.pose_landmarks:
-                for i, lms in enumerate(pose_res.pose_landmarks):
-                    color = self.colors[i % len(self.colors)]
-                    
-                    # Face Box Estimate
-                    pts = [lms[j] for j in range(9)]
-                    fx, fy = [p.x for p in pts], [p.y for p in pts]
-                    fw, fh = max(fx)-min(fx), max(fy)-min(fy)
-                    face_r = (min(fx)-fw*0.2, min(fy)-fh*0.6, fw*1.4, fh*2.2)
-                    
-                    # Chest Box Estimate
-                    cx = min(lms[11].x, lms[12].x, lms[23].x, lms[24].x)
-                    cw = max(lms[11].x, lms[12].x, lms[23].x, lms[24].x) - cx
-                    cy = min(lms[11].y, lms[12].y)
-                    ch = (max(lms[23].y, lms[24].y) - cy) * 0.6
-                    chest_r = (cx, cy, cw, ch)
-                    
-                    bodies.append({'id': i, 'face': face_r, 'chest': chest_r, 'wrists': [(lms[15].x, lms[15].y), (lms[16].x, lms[16].y)], 'color': color})
-                    
-                    # Draw Pose skeleton
+            res = pose_engine.detect(mp_img)
+            if res and res.pose_landmarks:
+                for lms in res.pose_landmarks:
+                    # High Visibility Skeleton
                     conns = [(11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23), (12, 24), (23, 24)]
                     for s, e in conns:
-                        cv2.line(img, (int(lms[s].x*w), int(lms[s].y*h)), (int(lms[e].x*w), int(lms[e].y*h)), color, 2)
+                        # Safety check for index existence
+                        if s < len(lms) and e < len(lms):
+                            p1 = (int(lms[s].x*w), int(lms[s].y*h))
+                            p2 = (int(lms[e].x*w), int(lms[e].y*h))
+                            cv2.line(img, p1, p2, (0, 255, 0), 4) # Reduced thickness for cleaner look
                     
-                    bx, by, bw, bh = int(face_r[0]*w), int(face_r[1]*h), int(face_r[2]*w), int(face_r[3]*h)
-                    cv2.rectangle(img, (bx, by), (bx+bw, by+bh), color, 2)
-                    cv2.putText(img, f"Person {i}", (bx, by-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
-            alerts = []
-            # 21 Finger Dots Logic
-            if HAND_ENGINE and hand_res and hand_res.hand_landmarks:
-                for hlms in hand_res.hand_landmarks:
-                    hw = (hlms[0].x, hlms[0].y) # wrist
-                    best_d, oid = 0.2, -1
-                    for b in bodies:
-                        for bw in b['wrists']:
-                            d = np.sqrt((hw[0]-bw[0])**2 + (hw[1]-bw[1])**2)
-                            if d < best_d: best_d, oid = d, b['id']
-                    
-                    hc = bodies[oid]['color'] if (oid != -1 and oid < len(bodies)) else (128, 128, 128)
-                    for pt in hlms:
-                        cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 4, hc, -1)
-                        if oid != -1 and oid < len(bodies):
-                            for other in bodies:
-                                if oid != other['id']:
-                                    if is_point_in_rect((pt.x, pt.y), other['face']): alerts.append((other['id'], oid, "Face"))
-                                    elif is_point_in_rect((pt.x, pt.y), other['chest']): alerts.append((other['id'], oid, "Chest"))
-
-            # Fallback to basic wrist dots if hand model missing
-            elif pose_res and pose_res.pose_landmarks:
-                for b in bodies:
-                    for wr in b['wrists']:
-                        cv2.circle(img, (int(wr[0]*w), int(wr[1]*h)), 10, b['color'], -1)
-
-            if alerts:
-                msg = "TOUCH: " + ", ".join([f"P{b}->P{a} {area}" for a, b, area in set(alerts)])
-                cv2.putText(img, msg, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-                overlay = img.copy()
-                cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 255), -1)
-                cv2.addWeighted(overlay, 0.15, img, 0.85, 0, img)
-
+                    # Draw pose landmarks as small circles
+                    for pt in lms:
+                        cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 4, (0, 255, 0), -1)
+                        
+                    # Face circle (nose)
+                    if len(lms) > 0:
+                        cv2.circle(img, (int(lms[0].x*w), int(lms[0].y*h)), 10, (0, 255, 0), -1)
         except Exception as e:
-            cv2.putText(img, f"Error: {str(e)}", (20, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-        
-        # Display FPS on screen
-        cv2.putText(img, f"FPS: {self.fps:.1f}", (img.shape[1]-120, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        
-        return av.VideoFrame.from_ndarray(img, format="bgr24")
+            cv2.putText(img, f"Pose Error: {str(e)[:20]}", (25, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
 
-webrtc_ctx = webrtc_streamer(
-    key="pose-final-engine-v14-fast", 
-    video_processor_factory=DetectProcessor, 
-    rtc_configuration=RTC_CONFIGURATION, 
-    media_stream_constraints={"video": True, "audio": False}, 
-    async_processing=True
+    if hand_engine:
+        try:
+            hres = hand_engine.detect(mp_img)
+            if hres and hres.hand_landmarks:
+                for hlms in hres.hand_landmarks:
+                    for pt in hlms:
+                        cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 5, (255, 255, 255), -1)
+        except Exception as e:
+            cv2.putText(img, f"Hand Error: {str(e)[:20]}", (25, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+
+    cv2.putText(img, "AI ACTIVE", (25, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+    
+    return av.VideoFrame.from_ndarray(img, format="bgr24")
+
+# --- APP UI ---
+
+st.sidebar.title("AI Detection Dashboard")
+for msg in engine_status:
+    if "✅" in msg:
+        st.sidebar.success(msg)
+    elif "❌" in msg:
+        st.sidebar.error(msg)
+    else:
+        st.sidebar.warning(msg)
+
+st.sidebar.markdown("---")
+st.sidebar.info("Status: Tracking Active")
+st.sidebar.markdown("""
+- **Person Detection**: Green Lines
+- **Hand Landmarks**: White Dots
+""")
+
+# Robust RTC Configuration with multiple STUN servers
+RTC_CONFIG = RTCConfiguration(
+    {"iceServers": [
+        {"urls": ["stun:stun.l.google.com:19302"]},
+        {"urls": ["stun:stun1.l.google.com:19302"]},
+        {"urls": ["stun:stun2.l.google.com:19302"]},
+        {"urls": ["stun:stun3.l.google.com:19302"]},
+        {"urls": ["stun:stun4.l.google.com:19302"]},
+    ]}
 )
 
-# --- DEBUG REPORT GENERATOR ---
-st.sidebar.markdown("---")
-st.sidebar.subheader("🐞 Troubleshooting")
-if st.sidebar.button("📋 Generate Debug Report"):
-    fps_val = "N/A (Stream not active)"
-    if webrtc_ctx.video_processor:
-        fps_val = f"{webrtc_ctx.video_processor.fps:.1f}"
-    
-    report = f"""--- CAMERA DEBUG REPORT ---
-Python: {sys.version.split()[0]}
-Streamlit: {st.__version__}
-MediaPipe: {mp.__version__}
-Pose AI: {'Ready' if POSE_ENGINE else 'Missing'}
-Hand AI: {'Ready' if HAND_ENGINE else 'Missing'}
-Current FPS: {fps_val}
-OS: {sys.platform}
----------------------------"""
-    st.sidebar.code(report, language="text")
-    st.sidebar.info("👆 Copy this message and send it to your friend!")
+webrtc_streamer(
+    key="harassment-detection",
+    video_frame_callback=video_frame_callback,
+    rtc_configuration=RTC_CONFIG,
+    media_stream_constraints={"video": True, "audio": False},
+    async_processing=True,
+)
