@@ -228,10 +228,12 @@ st.sidebar.info("""
 - Check browser console (F12)
 """)
 
-# Minimal RTC Configuration - sometimes less is more with WebRTC
-# Using empty config to rely on direct connection
+# RTC Configuration with public STUN server for ICE candidate gathering
+# Required for remote connections like HF Spaces
 try:
-    RTC_CONFIG = RTCConfiguration({"iceServers": []})
+    RTC_CONFIG = RTCConfiguration({
+        "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+    })
 except Exception:
     RTC_CONFIG = None
 
