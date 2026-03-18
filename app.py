@@ -119,71 +119,71 @@ print(f"Model loading complete. Pose: {pose_engine is not None}, Hand: {hand_eng
 # --- CALLBACK FUNCTION ---
 
 def video_frame_callback(frame):
-    """Minimal callback to keep WebRTC connection alive."""
+    """Ultra-minimal callback - keep WebRTC connection alive at all costs."""
     try:
+        # Convert frame to image - this MUST be fast
         img = frame.to_ndarray(format="bgr24")
+        h, w = img.shape[:2]
         
         # Mirror for natural view
         img = cv2.flip(img, 1)
-        h, w = img.shape[:2]
         
-        # Add status text
+        # Add status text ONLY - no heavy processing on main thread
         if pose_engine is None or hand_engine is None:
-            status_text = "Loading models..."
+            status_text = "⏳ Loading models..."
             status_color = (0, 165, 255)
         else:
-            status_text = "AI ACTIVE"
+            status_text = "✓ AI ACTIVE"
             status_color = (0, 255, 0)
         
         cv2.putText(img, status_text, (25, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, status_color, 2)
         
-        # Return frame first to keep connection alive
-        result_frame = av.VideoFrame.from_ndarray(img, format="bgr24")
+        # Draw cached detection results (from background thread)
+        try:
+            with ai_state.lock:
+                pres = ai_state.pose_results
+                hres = ai_state.hand_results
+            
+            if pres and pres.pose_landmarks and pose_engine is not None:
+                for lms in pres.pose_landmarks:
+                    conns = [(11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23), (12, 24), (23, 24)]
+                    for s, e in conns:
+                        if s < len(lms) and e < len(lms):
+                            p1 = (int(lms[s].x*w), int(lms[s].y*h))
+                            p2 = (int(lms[e].x*w), int(lms[e].y*h))
+                            cv2.line(img, p1, p2, (0, 255, 0), 4)
+                    for pt in lms:
+                        cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 4, (0, 255, 0), -1)
+
+            if hres and hres.hand_landmarks and hand_engine is not None:
+                for hlms in hres.hand_landmarks:
+                    for pt in hlms:
+                        cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 5, (255, 255, 255), -1)
+        except Exception as draw_err:
+            print(f"Draw error: {draw_err}")
         
-        # Only run inference if BOTH models are loaded and not already processing
+        # Start inference in background if available
         if pose_engine is not None and hand_engine is not None and not ai_state.processing:
-            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
+            try:
+                img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
             
-            def run_inference():
-                ai_state.processing = True
-                try:
-                    if pose_engine:
+                def run_inference():
+                    ai_state.processing = True
+                    try:
                         ai_state.pose_results = pose_engine.detect(mp_img)
-                    if hand_engine:
                         ai_state.hand_results = hand_engine.detect(mp_img)
-                except Exception as e:
-                    print(f"⚠️ Inference error: {e}")
-                finally:
-                    ai_state.processing = False
-            
-            threading.Thread(target=run_inference, daemon=True).start()
+                    except Exception as inf_err:
+                        print(f"Inference error: {inf_err}")
+                    finally:
+                        ai_state.processing = False
+                
+                threading.Thread(target=run_inference, daemon=True).start()
+            except Exception as thread_err:
+                print(f"Thread error: {thread_err}")
         
-        # Draw detection results on the frame
-        with ai_state.lock:
-            pres = ai_state.pose_results
-            hres = ai_state.hand_results
-
-        if pres and pres.pose_landmarks and pose_engine is not None:
-            for lms in pres.pose_landmarks:
-                conns = [(11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23), (12, 24), (23, 24)]
-                for s, e in conns:
-                    if s < len(lms) and e < len(lms):
-                        p1 = (int(lms[s].x*w), int(lms[s].y*h))
-                        p2 = (int(lms[e].x*w), int(lms[e].y*h))
-                        cv2.line(img, p1, p2, (0, 255, 0), 4)
-                for pt in lms:
-                    cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 4, (0, 255, 0), -1)
-
-        if hres and hres.hand_landmarks and hand_engine is not None:
-            for hlms in hres.hand_landmarks:
-                for pt in hlms:
-                    cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 5, (255, 255, 255), -1)
-        
-        # Update and return final frame
-        result_frame = av.VideoFrame.from_ndarray(img, format="bgr24")
-        return result_frame
-    except Exception as e:
+        # Return frame immediately
+        return av.VideoFrame.from_ndarray(img, format="bgr24")
         print(f"❌ Frame processing error: {e}")
         import traceback
         traceback.print_exc()
