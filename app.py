@@ -168,16 +168,20 @@ st.sidebar.info("""
 - Check browser console (F12)
 """)
 
-# RTC Configuration with public STUN server for ICE candidate gathering
-# Required for remote connections like HF Spaces
+# Multiple STUN servers for better ICE candidate gathering
+# Using well-known public STUN servers
 try:
     RTC_CONFIG = RTCConfiguration({
-        "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
+        "iceServers": [
+            {"urls": ["stun:stun.l.google.com:19302"]},
+            {"urls": ["stun:stun1.l.google.com:19302"]},
+            {"urls": ["stun:stun2.l.google.com:19302"]},
+            {"urls": ["stun:stun3.l.google.com:19302"]},
+        ]
     })
 except Exception:
     RTC_CONFIG = None
 
-# Simplest possible WebRTC configuration
 st.write("---")
 st.subheader("📹 Live Camera Feed")
 st.write("Click START below, grant camera permission, and the feed should appear.")
@@ -185,19 +189,15 @@ st.info("💡 If camera doesn't appear: Refresh page → Check browser permissio
 
 try:
     webrtc_streamer(
-        key="harassment-detection-v102",  # Changed key to force refresh
+        key="harassment-detection-v103",
         mode=WebRtcMode.SENDRECV,
         video_frame_callback=video_frame_callback,
         rtc_configuration=RTC_CONFIG,
         media_stream_constraints={
-            "video": {
-                "width": {"ideal": 640},
-                "height": {"ideal": 480},
-                "frameRate": {"ideal": 20}
-            },
+            "video": {"width": {"ideal": 640}, "height": {"ideal": 480}},
             "audio": False
         },
-        async_processing=True,
+        async_processing=False,
     )
 except Exception as webrtc_error:
     st.error(f"❌ WebRTC Connection Error")
