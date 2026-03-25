@@ -287,11 +287,17 @@ function checkHarassment(poseResult, handResult) {
 function draw(poseResult, handResult) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+  let bodiesWrists = [];
+
   // Draw pose skeletons
   if (poseResult && poseResult.landmarks) {
     poseResult.landmarks.forEach((lms, pi) => {
       const color = PERSON_COLORS[pi % PERSON_COLORS.length];
       const W = canvas.width, H = canvas.height;
+
+      const leftWrist = lms.length > 15 ? lms[15] : {x:0, y:0};
+      const rightWrist = lms.length > 16 ? lms[16] : {x:0, y:0};
+      bodiesWrists.push({ id: pi, color: color, wrists: [leftWrist, rightWrist] });
 
       // Connections
       ctx.strokeStyle = color;
@@ -318,12 +324,24 @@ function draw(poseResult, handResult) {
   if (handResult && handResult.landmarks) {
     handResult.landmarks.forEach(hlms => {
       const W = canvas.width, H = canvas.height;
-      const ownerIdx = hlms.ownerIdx;
-      const color = (ownerIdx !== undefined && ownerIdx !== -1) 
-        ? PERSON_COLORS[ownerIdx % PERSON_COLORS.length] 
-        : "#ffffff";
-        
-      ctx.strokeStyle = color;
+      
+      let ownerColor = "#ffffff";
+      let minDist = 100.0;
+      const wrist = hlms[0];
+      for (const body of bodiesWrists) {
+        for (const bw of body.wrists) {
+          const dx = wrist.x - bw.x;
+          const dy = wrist.y - bw.y;
+          const d = Math.sqrt(dx*dx + dy*dy);
+          if (d < minDist) {
+            minDist = d;
+            ownerColor = body.color;
+          }
+        }
+      }
+      if (minDist > 0.6) ownerColor = "#ffffff";
+
+      ctx.strokeStyle = ownerColor;
       ctx.lineWidth = 2;
       for (const [s, e] of HAND_CONNECTIONS) {
         if (s < hlms.length && e < hlms.length) {
@@ -333,7 +351,7 @@ function draw(poseResult, handResult) {
           ctx.stroke();
         }
       }
-      ctx.fillStyle = color;
+      ctx.fillStyle = ownerColor;
       for (const lm of hlms) {
         ctx.beginPath();
         ctx.arc(lm.x * W, lm.y * H, 3, 0, Math.PI*2);
