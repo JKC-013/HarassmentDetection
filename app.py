@@ -16,8 +16,46 @@ st.set_page_config(
     page_title="Harassment Detection AI",
     page_icon="🛡️",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
+
+PERSON_COLORS = [
+    (0, 255, 0),   # Green
+    (255, 0, 0),   # Blue
+    (0, 255, 255), # Yellow
+    (255, 0, 255)  # Magenta
+]
+
+def get_distance(p1, p2):
+    return np.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
+
+def get_face_bbox_from_pose(landmarks):
+    face_indices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    xs = [landmarks[i].x for i in face_indices if i < len(landmarks)]
+    ys = [landmarks[i].y for i in face_indices if i < len(landmarks)]
+    if not xs: return (0, 0, 0, 0)
+    xmin, xmax = min(xs), max(xs)
+    ymin, ymax = min(ys), max(ys)
+    width, height = xmax - xmin, ymax - ymin
+    padding_x, padding_y = width * 0.5, height * 1.5 
+    return (max(0, xmin - padding_x/2), max(0, ymin - padding_y/2), min(1, width + padding_x), min(1, height + padding_y))
+
+def get_chest_bbox_from_pose(landmarks):
+    if len(landmarks) <= 24: return (0, 0, 0, 0)
+    shoulder_l, shoulder_r = landmarks[11], landmarks[12]
+    hip_l, hip_r = landmarks[23], landmarks[24]
+    xmin = min(shoulder_l.x, shoulder_r.x, hip_l.x, hip_r.x)
+    xmax = max(shoulder_l.x, shoulder_r.x, hip_l.x, hip_r.x)
+    ymin = min(shoulder_l.y, shoulder_r.y)
+    ymax = max(hip_l.y, hip_r.y)
+    torso_height = ymax - ymin
+    chest_ymax = ymin + (torso_height * 0.6)
+    return (xmin, ymin, xmax - xmin, chest_ymax - ymin)
+
+def is_point_in_rect(point, rect):
+    x, y = point
+    rx, ry, rw, rh = rect
+    return rx <= x <= rx + rw and ry <= y <= ry + rh
 
 # ============================================================================
 # MODEL LOADING
@@ -79,32 +117,6 @@ with col2:
 # Load models
 pose_engine, hand_engine, status_messages = load_mediapipe_engines()
 
-# Sidebar - Status
-with st.sidebar:
-    st.header("📊 Status")
-    for msg in status_messages:
-        if "✅" in msg:
-            st.success(msg)
-        elif "❌" in msg:
-            st.error(msg)
-        elif "⚠️" in msg:
-            st.warning(msg)
-        else:
-            st.info(msg)
-    
-    st.divider()
-    
-    st.subheader("📋 Instructions")
-    st.markdown("""
-    1. **Click START** to begin
-    2. **Grant camera permission** when prompted
-    3. **View real-time detection** with pose and hand landmarks
-    
-    **Troubleshooting:**
-    - Refresh if camera doesn't appear
-    - Try Chrome or Firefox
-    - Check browser permissions (📷)
-    """)
 
 # Main content
 st.divider()
@@ -147,23 +159,81 @@ with tab1:
                 pose_result = pose_engine.detect(mp_img)
                 hand_result = hand_engine.detect(mp_img)
                 
+                bodies = []
+                
                 # Draw pose landmarks
                 if pose_result.pose_landmarks:
-                    for lms in pose_result.pose_landmarks:
+                    for i, lms in enumerate(pose_result.pose_landmarks):
+                        color = PERSON_COLORS[i % len(PERSON_COLORS)]
+                        face_bbox = get_face_bbox_from_pose(lms)
+                        chest_bbox = get_chest_bbox_from_pose(lms)
+                        
+                        left_wrist = (lms[15].x, lms[15].y) if 15 < len(lms) else (0, 0)
+                        right_wrist = (lms[16].x, lms[16].y) if 16 < len(lms) else (0, 0)
+                        
+                        bodies.append({
+                            'id': i,
+                            'face_bbox': face_bbox,
+                            'chest_bbox': chest_bbox,
+                            'wrists': [left_wrist, right_wrist],
+                            'color': color
+                        })
+                        
                         conns = [(11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23), (12, 24), (23, 24)]
                         for s, e in conns:
                             if s < len(lms) and e < len(lms):
                                 p1 = (int(lms[s].x*w), int(lms[s].y*h))
                                 p2 = (int(lms[e].x*w), int(lms[e].y*h))
-                                cv2.line(img, p1, p2, (0, 255, 0), 4)
+                                cv2.line(img, p1, p2, color, 4)
                         for pt in lms:
-                            cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 4, (0, 255, 0), -1)
+                            cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 4, color, -1)
+                            
+                        fox, foy, fow, foh = int(face_bbox[0]*w), int(face_bbox[1]*h), int(face_bbox[2]*w), int(face_bbox[3]*h)
+                        cv2.rectangle(img, (fox, foy), (fox+fow, foy+foh), color, 2)
+                        cx, cy, cw_rect, ch_rect = int(chest_bbox[0]*w), int(chest_bbox[1]*h), int(chest_bbox[2]*w), int(chest_bbox[3]*h)
+                        cv2.rectangle(img, (cx, cy), (cx+cw_rect, cy+ch_rect), color, 1, cv2.LINE_4)
+                        cv2.putText(img, f"P{i}", (fox, max(0, foy-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                
+                alerts = []
                 
                 # Draw hand landmarks
                 if hand_result.hand_landmarks:
                     for hlms in hand_result.hand_landmarks:
+                        hand_wrist_normalized = (hlms[0].x, hlms[0].y) if hlms else (0, 0)
+                        min_dist = 100.0
+                        owner_id = -1
+                        for body in bodies:
+                            for body_wrist in body['wrists']:
+                                dist = get_distance(hand_wrist_normalized, body_wrist)
+                                if dist < min_dist:
+                                    min_dist = dist
+                                    owner_id = body['id']
+                        
+                        if min_dist > 0.2:
+                            owner_id = -1
+                            
+                        color = bodies[owner_id]['color'] if owner_id != -1 else (255, 255, 255)
                         for pt in hlms:
-                            cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 5, (255, 255, 255), -1)
+                            cv2.circle(img, (int(pt.x*w), int(pt.y*h)), 5, color, -1)
+                            
+                        if owner_id != -1:
+                            for landmark in hlms:
+                                pt_norm = (landmark.x, landmark.y)
+                                for other_body in bodies:
+                                    if owner_id != other_body['id']:
+                                        if is_point_in_rect(pt_norm, other_body['face_bbox']):
+                                            alerts.append((other_body['id'], owner_id, "Face"))
+                                            break
+                                        if is_point_in_rect(pt_norm, other_body['chest_bbox']):
+                                            alerts.append((other_body['id'], owner_id, "Chest"))
+                                            break
+                                            
+                if alerts:
+                    alert_text = "ALERTS: " + ", ".join([f"P{b} touches P{a}'s {area}!" for a, b, area in set(alerts)])
+                    cv2.putText(img, alert_text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                    overlay = img.copy()
+                    cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 255), -1)
+                    cv2.addWeighted(overlay, 0.15, img, 0.85, 0, img)
                 
                 # Display result
                 st.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), caption="Detection Results", use_column_width=True)
@@ -368,39 +438,66 @@ const HAND_CONNECTIONS = [
 // ── Harassment check ─────────────────────────────────────────────────────────
 // Keypoints 0-10 are face/head region in pose landmarks
 const FACE_KPS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+const CHEST_KPS = [11, 12, 23, 24]; // Shoulders and hips
 const ALERT_DIST = 0.08;  // normalised distance threshold
+
+function getDistance(p1, p2) {
+  const dx = p1.x - p2.x;
+  const dy = p1.y - p2.y;
+  return Math.sqrt(dx*dx + dy*dy);
+}
 
 function checkHarassment(poseResult, handResult) {
   if (!poseResult || poseResult.landmarks.length < 2) return false;
   if (!handResult  || handResult.landmarks.length === 0)  return false;
 
-  // Build face bounding regions per person
-  const faceCentres = poseResult.landmarks.map(lms => {
-    let sx = 0, sy = 0, count = 0;
+  // Build bounding regions per person
+  const bodies = poseResult.landmarks.map(lms => {
+    let fx = 0, fy = 0, fCount = 0;
     for (const ki of FACE_KPS) {
-      if (ki < lms.length) { sx += lms[ki].x; sy += lms[ki].y; count++; }
+      if (ki < lms.length) { fx += lms[ki].x; fy += lms[ki].y; fCount++; }
     }
-    return count ? { x: sx/count, y: sy/count } : null;
+    const faceCenter = fCount ? { x: fx/fCount, y: fy/fCount } : null;
+
+    let cx = 0, cy = 0, cCount = 0;
+    for (const ki of CHEST_KPS) {
+      if (ki < lms.length) { cx += lms[ki].x; cy += lms[ki].y; cCount++; }
+    }
+    const chestCenter = cCount ? { x: cx/cCount, y: cy/cCount - 0.05 } : null;
+
+    const leftWrist = lms.length > 15 ? lms[15] : {x:0, y:0};
+    const rightWrist = lms.length > 16 ? lms[16] : {x:0, y:0};
+
+    return { faceCenter, chestCenter, wrists: [leftWrist, rightWrist] };
   });
 
-  // For each hand, check if its wrist (lm 0) is near another person's face
+  let harassementDetected = false;
+
   for (let hi = 0; hi < handResult.landmarks.length; hi++) {
     const wrist = handResult.landmarks[hi][0];
-    for (let pi = 0; pi < faceCentres.length; pi++) {
-      const fc = faceCentres[pi];
-      if (!fc) continue;
-      const dx = wrist.x - fc.x;
-      const dy = wrist.y - fc.y;
-      if (Math.sqrt(dx*dx + dy*dy) < ALERT_DIST) {
-        // Only alert if this hand is NOT from this person
-        // Simple heuristic: face centre x ± 0.2 window
-        const samePerson = Math.abs(wrist.x - fc.x) < 0.05 &&
-                            Math.abs(wrist.y - fc.y) < 0.05;
-        if (!samePerson) return true;
+    let minDist = 100.0;
+    let ownerIdx = -1;
+    
+    for (let pi = 0; pi < bodies.length; pi++) {
+      for (const bw of bodies[pi].wrists) {
+        const d = getDistance(wrist, bw);
+        if (d < minDist) { minDist = d; ownerIdx = pi; }
+      }
+    }
+    if (minDist > 0.2) ownerIdx = -1;
+    
+    handResult.landmarks[hi].ownerIdx = ownerIdx;
+
+    if (ownerIdx !== -1) {
+      for (let pi = 0; pi < bodies.length; pi++) {
+        if (ownerIdx === pi) continue;
+        const b = bodies[pi];
+        if (b.faceCenter && getDistance(wrist, b.faceCenter) < ALERT_DIST) harassementDetected = true;
+        if (b.chestCenter && getDistance(wrist, b.chestCenter) < ALERT_DIST + 0.04) harassementDetected = true;
       }
     }
   }
-  return false;
+  return harassementDetected;
 }
 
 // ── Draw ─────────────────────────────────────────────────────────────────────
@@ -438,7 +535,12 @@ function draw(poseResult, handResult) {
   if (handResult && handResult.landmarks) {
     handResult.landmarks.forEach(hlms => {
       const W = canvas.width, H = canvas.height;
-      ctx.strokeStyle = "#ffffff";
+      const ownerIdx = hlms.ownerIdx;
+      const color = (ownerIdx !== undefined && ownerIdx !== -1) 
+        ? PERSON_COLORS[ownerIdx % PERSON_COLORS.length] 
+        : "#ffffff";
+        
+      ctx.strokeStyle = color;
       ctx.lineWidth = 2;
       for (const [s, e] of HAND_CONNECTIONS) {
         if (s < hlms.length && e < hlms.length) {
@@ -448,7 +550,7 @@ function draw(poseResult, handResult) {
           ctx.stroke();
         }
       }
-      ctx.fillStyle = "#ffffff";
+      ctx.fillStyle = color;
       for (const lm of hlms) {
         ctx.beginPath();
         ctx.arc(lm.x * W, lm.y * H, 3, 0, Math.PI*2);
@@ -481,11 +583,11 @@ function detectLoop(now) {
     handResult = handLandmarker.detectForVideo(video, ts);
   } catch (e) { return; }
 
-  draw(poseResult, handResult);
-
-  // Harassment alert
+  // Harassment alert (also assigns ownerIdx to hands)
   const alert = checkHarassment(poseResult, handResult);
   alertBanner.style.display = alert ? 'block' : 'none';
+
+  draw(poseResult, handResult);
 
   // FPS counter
   fpsArr.push(ts);

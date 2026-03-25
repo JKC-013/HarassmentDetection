@@ -29,6 +29,44 @@ import numpy as np
 
 app = Flask(__name__)
 
+PERSON_COLORS = [
+    (0, 255, 0),   # Green
+    (255, 0, 0),   # Blue
+    (0, 255, 255), # Yellow
+    (255, 0, 255)  # Magenta
+]
+
+def get_distance(p1, p2):
+    return np.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
+
+def get_face_bbox_from_pose(landmarks):
+    face_indices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    xs = [landmarks[i].x for i in face_indices if i < len(landmarks)]
+    ys = [landmarks[i].y for i in face_indices if i < len(landmarks)]
+    if not xs: return (0, 0, 0, 0)
+    xmin, xmax = min(xs), max(xs)
+    ymin, ymax = min(ys), max(ys)
+    width, height = xmax - xmin, ymax - ymin
+    padding_x, padding_y = width * 0.5, height * 1.5 
+    return (max(0, xmin - padding_x/2), max(0, ymin - padding_y/2), min(1, width + padding_x), min(1, height + padding_y))
+
+def get_chest_bbox_from_pose(landmarks):
+    if len(landmarks) <= 24: return (0, 0, 0, 0)
+    shoulder_l, shoulder_r = landmarks[11], landmarks[12]
+    hip_l, hip_r = landmarks[23], landmarks[24]
+    xmin = min(shoulder_l.x, shoulder_r.x, hip_l.x, hip_r.x)
+    xmax = max(shoulder_l.x, shoulder_r.x, hip_l.x, hip_r.x)
+    ymin = min(shoulder_l.y, shoulder_r.y)
+    ymax = max(hip_l.y, hip_r.y)
+    torso_height = ymax - ymin
+    chest_ymax = ymin + (torso_height * 0.6)
+    return (xmin, ymin, xmax - xmin, chest_ymax - ymin)
+
+def is_point_in_rect(point, rect):
+    x, y = point
+    rx, ry, rw, rh = rect
+    return rx <= x <= rx + rw and ry <= y <= ry + rh
+
 # Global state
 class CameraState:
     def __init__(self):
@@ -115,29 +153,88 @@ def capture_frames():
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
                     
+                    bodies = []
+                    
                     # Pose detection
                     if state.pose_engine is not None:
                         pose_result = state.pose_engine.detect(mp_img)
                         if pose_result.pose_landmarks:
-                            for lms in pose_result.pose_landmarks:
+                            for i, lms in enumerate(pose_result.pose_landmarks):
+                                color = PERSON_COLORS[i % len(PERSON_COLORS)]
+                                face_bbox = get_face_bbox_from_pose(lms)
+                                chest_bbox = get_chest_bbox_from_pose(lms)
+                                
+                                left_wrist = (lms[15].x, lms[15].y) if 15 < len(lms) else (0, 0)
+                                right_wrist = (lms[16].x, lms[16].y) if 16 < len(lms) else (0, 0)
+                                
+                                bodies.append({
+                                    'id': i,
+                                    'face_bbox': face_bbox,
+                                    'chest_bbox': chest_bbox,
+                                    'wrists': [left_wrist, right_wrist],
+                                    'color': color
+                                })
+                                
                                 # Draw skeleton
                                 conns = [(11, 12), (11, 13), (13, 15), (12, 14), (14, 16), (11, 23), (12, 24), (23, 24)]
                                 for s, e in conns:
                                     if s < len(lms) and e < len(lms):
                                         p1 = (int(lms[s].x*w), int(lms[s].y*h))
                                         p2 = (int(lms[e].x*w), int(lms[e].y*h))
-                                        cv2.line(frame, p1, p2, (0, 255, 0), 2)
+                                        cv2.line(frame, p1, p2, color, 2)
                                 # Draw joints
                                 for pt in lms:
-                                    cv2.circle(frame, (int(pt.x*w), int(pt.y*h)), 3, (0, 255, 0), -1)
+                                    cv2.circle(frame, (int(pt.x*w), int(pt.y*h)), 3, color, -1)
+                                    
+                                # Draw Bboxes & ID
+                                fox, foy, fow, foh = int(face_bbox[0]*w), int(face_bbox[1]*h), int(face_bbox[2]*w), int(face_bbox[3]*h)
+                                cv2.rectangle(frame, (fox, foy), (fox+fow, foy+foh), color, 2)
+                                cx, cy, cw_rect, ch_rect = int(chest_bbox[0]*w), int(chest_bbox[1]*h), int(chest_bbox[2]*w), int(chest_bbox[3]*h)
+                                cv2.rectangle(frame, (cx, cy), (cx+cw_rect, cy+ch_rect), color, 1, cv2.LINE_4)
+                                cv2.putText(frame, f"P{i}", (fox, max(0, foy-10)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+                    
+                    alerts = []
                     
                     # Hand detection
                     if state.hand_engine is not None:
                         hand_result = state.hand_engine.detect(mp_img)
                         if hand_result.hand_landmarks:
                             for hlms in hand_result.hand_landmarks:
+                                hand_wrist_normalized = (hlms[0].x, hlms[0].y) if hlms else (0, 0)
+                                min_dist = 100.0
+                                owner_id = -1
+                                for body in bodies:
+                                    for body_wrist in body['wrists']:
+                                        dist = get_distance(hand_wrist_normalized, body_wrist)
+                                        if dist < min_dist:
+                                            min_dist = dist
+                                            owner_id = body['id']
+                                
+                                if min_dist > 0.2:
+                                    owner_id = -1
+                                    
+                                color = bodies[owner_id]['color'] if owner_id != -1 else (255, 255, 255)
                                 for pt in hlms:
-                                    cv2.circle(frame, (int(pt.x*w), int(pt.y*h)), 3, (255, 255, 255), -1)
+                                    cv2.circle(frame, (int(pt.x*w), int(pt.y*h)), 3, color, -1)
+                                    
+                                if owner_id != -1:
+                                    for landmark in hlms:
+                                        pt_norm = (landmark.x, landmark.y)
+                                        for other_body in bodies:
+                                            if owner_id != other_body['id']:
+                                                if is_point_in_rect(pt_norm, other_body['face_bbox']):
+                                                    alerts.append((other_body['id'], owner_id, "Face"))
+                                                    break
+                                                if is_point_in_rect(pt_norm, other_body['chest_bbox']):
+                                                    alerts.append((other_body['id'], owner_id, "Chest"))
+                                                    break
+                    
+                    if alerts:
+                        alert_text = "ALERTS: " + ", ".join([f"P{b} touches P{a}'s {area}!" for a, b, area in set(alerts)])
+                        cv2.putText(frame, alert_text, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                        overlay = frame.copy()
+                        cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 255), -1)
+                        cv2.addWeighted(overlay, 0.15, frame, 0.85, 0, frame)
                 except Exception as e:
                     print(f"Detection error: {e}")
                 
