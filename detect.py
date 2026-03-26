@@ -113,6 +113,8 @@ def main():
     print("Multi-Person Face Touch Detection Started.")
     print("Press 'q' to quit.")
 
+    tracked_hands = []
+
     while cap.isOpened():
         success, image = cap.read()
         if not success: break
@@ -167,40 +169,88 @@ def main():
 
         alerts = [] 
         
+        current_hands = []
         if hand_result.multi_hand_landmarks:
-            for hand_landmarks in hand_result.multi_hand_landmarks:
-                hand_wrist_normalized = (hand_landmarks.landmark[0].x, hand_landmarks.landmark[0].y)
+            for i, hand_landmarks in enumerate(hand_result.multi_hand_landmarks):
+                current_hands.append({
+                    'id': i,
+                    'wrist': (hand_landmarks.landmark[0].x, hand_landmarks.landmark[0].y),
+                    'landmarks': hand_landmarks.landmark,
+                    'matched': False,
+                    'owner_id': -1
+                })
                 
+        # Match tracked hands
+        for th in tracked_hands:
+            best_dist = 0.2
+            best_hand = None
+            for ch in current_hands:
+                if ch['matched']: continue
+                d = get_distance(th['wrist'], ch['wrist'])
+                if d < best_dist:
+                    best_dist = d
+                    best_hand = ch
+            if best_hand:
+                best_hand['matched'] = True
+                best_hand['owner_id'] = th['owner_id']
+                th['wrist'] = best_hand['wrist']
+                th['updated'] = True
+            else:
+                th['updated'] = False
+                
+        # Filter tracked hands
+        tracked_hands = [th for th in tracked_hands if th['updated']]
+        
+        # Assign new hands
+        for ch in current_hands:
+            if not ch['matched']:
                 min_dist = 100.0
                 owner_id = -1
                 for body in bodies:
                     for body_wrist in body['wrists']:
-                        dist = get_distance(hand_wrist_normalized, body_wrist)
-                        if dist < min_dist:
-                            min_dist = dist
+                        d = get_distance(ch['wrist'], body_wrist)
+                        if d < min_dist:
+                            min_dist = d
                             owner_id = body['id']
-                
                 if min_dist > 0.2:
                     owner_id = -1
+                ch['owner_id'] = owner_id
+                tracked_hands.append({'wrist': ch['wrist'], 'owner_id': owner_id, 'updated': True})
+
+        for ch in current_hands:
+            owner_id = ch['owner_id']
+            color = (128, 128, 128)
+            owner_body = None
+            for b in bodies:
+                if b['id'] == owner_id:
+                    color = b['color']
+                    owner_body = b
+                    break
+                    
+            for lm in ch['landmarks']:
+                lx, ly = int(lm.x * w), int(lm.y * h)
+                cv2.circle(image, (lx, ly), 4, color, -1)
                 
-                color = bodies[owner_id]['color'] if owner_id != -1 else (128, 128, 128)
-                for lm in hand_landmarks.landmark:
-                    lx, ly = int(lm.x * w), int(lm.y * h)
-                    cv2.circle(image, (lx, ly), 4, color, -1)
+            if owner_body:
+                bw15 = owner_body['wrists'][0]
+                bw16 = owner_body['wrists'][1]
+                w_pt = ch['wrist']
+                d15 = get_distance(w_pt, bw15)
+                d16 = get_distance(w_pt, bw16)
+                closest_w = bw15 if d15 < d16 else bw16
+                cv2.line(image, (int(w_pt[0]*w), int(w_pt[1]*h)), (int(closest_w[0]*w), int(closest_w[1]*h)), color, 2)
                 
-                if owner_id != -1:
-                    for landmark in hand_landmarks.landmark:
-                        pt = (landmark.x, landmark.y)
-                        for other_body in bodies:
-                            if owner_id != other_body['id']:
-                                # Check Face touch
-                                if is_point_in_rect(pt, other_body['face_bbox']):
-                                    alerts.append((other_body['id'], owner_id, "Face"))
-                                    break
-                                # Check Chest touch
-                                if is_point_in_rect(pt, other_body['chest_bbox']):
-                                    alerts.append((other_body['id'], owner_id, "Chest"))
-                                    break
+            if owner_id != -1:
+                for landmark in ch['landmarks']:
+                    pt = (landmark.x, landmark.y)
+                    for other_body in bodies:
+                        if owner_id != other_body['id']:
+                            if is_point_in_rect(pt, other_body['face_bbox']):
+                                alerts.append((other_body['id'], owner_id, "Face"))
+                                break
+                            if is_point_in_rect(pt, other_body['chest_bbox']):
+                                alerts.append((other_body['id'], owner_id, "Chest"))
+                                break
 
         if alerts:
             # unique_alerts = set(alerts)

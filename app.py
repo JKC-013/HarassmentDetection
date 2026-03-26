@@ -77,7 +77,7 @@ LIVE_DETECTION_HTML = """
   @keyframes pulse { from { opacity: 1; } to { opacity: 0.6; } }
   #video-wrap {
     position: relative;
-    width: 640px;
+    width: 800px;
     max-width: 100%;
     border-radius: 12px;
     overflow: hidden;
@@ -87,6 +87,7 @@ LIVE_DETECTION_HTML = """
   video, canvas {
     width: 100%;
     display: block;
+    transform: scaleX(-1);
   }
   canvas {
     position: absolute;
@@ -158,6 +159,7 @@ let animFrame      = null;
 let streaming      = false;
 let lastFrameTime  = -1;
 let fpsArr         = [];
+let trackedHands   = [];
 
 // ── Load models ──────────────────────────────────────────────────────────────
 async function loadModels() {
@@ -231,7 +233,11 @@ function getDistance(p1, p2) {
 
 function checkHarassment(poseResult, handResult) {
   if (!poseResult || poseResult.landmarks.length < 2) return false;
-  if (!handResult  || handResult.landmarks.length === 0)  return false;
+  
+  if (!handResult || handResult.landmarks.length === 0) {
+    trackedHands = [];
+    return false;
+  }
 
   // Build bounding regions per person
   const bodies = poseResult.landmarks.map(lms => {
@@ -253,30 +259,64 @@ function checkHarassment(poseResult, handResult) {
     return { faceCenter, chestCenter, wrists: [leftWrist, rightWrist] };
   });
 
-  let harassementDetected = false;
-
+  let currentHands = [];
   for (let hi = 0; hi < handResult.landmarks.length; hi++) {
-    const wrist = handResult.landmarks[hi][0];
-    let minDist = 100.0;
-    let ownerIdx = -1;
-    
-    for (let pi = 0; pi < bodies.length; pi++) {
-      for (const bw of bodies[pi].wrists) {
-        const d = getDistance(wrist, bw);
-        if (d < minDist) { minDist = d; ownerIdx = pi; }
+    currentHands.push({ hi: hi, wrist: handResult.landmarks[hi][0], matched: false, lms: handResult.landmarks[hi] });
+  }
+
+  // Match existing tracked hands
+  for (let th of trackedHands) {
+    let bestDist = 0.2; // max distance for frame-to-frame tracking
+    let bestHand = null;
+    for (let ch of currentHands) {
+      if (ch.matched) continue;
+      let d = getDistance(th.wrist, ch.wrist);
+      if (d < bestDist) {
+        bestDist = d;
+        bestHand = ch;
       }
     }
-    // Remove strict cutoff (if missing wrist is e.g. 1.0 apart, it's fine. We map to closest person)
-    if (minDist > 0.6) ownerIdx = -1; // Keep a generous fallback to unowned only if absurdly far
-    
-    handResult.landmarks[hi].ownerIdx = ownerIdx;
+    if (bestHand) {
+      bestHand.matched = true;
+      th.wrist = bestHand.wrist;
+      th.updated = true;
+      bestHand.lms.ownerIdx = th.ownerIdx;
+    } else {
+      th.updated = false;
+    }
+  }
 
+  // Filter out hands that disappeared
+  trackedHands = trackedHands.filter(th => th.updated);
+
+  // Assign owners to new hands
+  for (let ch of currentHands) {
+    if (!ch.matched) {
+      let minDist = 100.0;
+      let ownerIdx = -1;
+      for (let pi = 0; pi < bodies.length; pi++) {
+        for (const bw of bodies[pi].wrists) {
+          const d = getDistance(ch.wrist, bw);
+          if (d < minDist) { minDist = d; ownerIdx = pi; }
+        }
+      }
+      if (minDist > 0.6) ownerIdx = -1;
+
+      ch.lms.ownerIdx = ownerIdx;
+      trackedHands.push({ wrist: ch.wrist, ownerIdx: ownerIdx, updated: true });
+    }
+  }
+
+  let harassementDetected = false;
+
+  for (let ch of currentHands) {
+    const ownerIdx = ch.lms.ownerIdx;
     if (ownerIdx !== -1) {
       for (let pi = 0; pi < bodies.length; pi++) {
         if (ownerIdx === pi) continue;
         const b = bodies[pi];
-        if (b.faceCenter && getDistance(wrist, b.faceCenter) < ALERT_DIST) harassementDetected = true;
-        if (b.chestCenter && getDistance(wrist, b.chestCenter) < ALERT_DIST + 0.04) harassementDetected = true;
+        if (b.faceCenter && getDistance(ch.wrist, b.faceCenter) < ALERT_DIST) harassementDetected = true;
+        if (b.chestCenter && getDistance(ch.wrist, b.chestCenter) < ALERT_DIST + 0.04) harassementDetected = true;
       }
     }
   }
@@ -326,20 +366,38 @@ function draw(poseResult, handResult) {
       const W = canvas.width, H = canvas.height;
       
       let ownerColor = "#ffffff";
-      let minDist = 100.0;
-      const wrist = hlms[0];
-      for (const body of bodiesWrists) {
-        for (const bw of body.wrists) {
-          const dx = wrist.x - bw.x;
-          const dy = wrist.y - bw.y;
-          const d = Math.sqrt(dx*dx + dy*dy);
-          if (d < minDist) {
-            minDist = d;
-            ownerColor = body.color;
-          }
+      const ownerId = hlms.ownerIdx;
+      let ownerPose = null;
+      
+      if (ownerId !== undefined && ownerId !== -1) {
+        const bodyObj = bodiesWrists.find(b => b.id === ownerId);
+        if (bodyObj) {
+          ownerColor = bodyObj.color;
+        }
+        if (poseResult && poseResult.landmarks && poseResult.landmarks[ownerId]) {
+          ownerPose = poseResult.landmarks[ownerId];
         }
       }
-      if (minDist > 0.6) ownerColor = "#ffffff";
+
+      // connect hand wrist to closest pose wrist
+      if (ownerPose) {
+        const bw15 = ownerPose.length > 15 ? ownerPose[15] : {x:0, y:0};
+        const bw16 = ownerPose.length > 16 ? ownerPose[16] : {x:0, y:0};
+        const dx15 = hlms[0].x - bw15.x;
+        const dy15 = hlms[0].y - bw15.y;
+        const d15 = Math.sqrt(dx15*dx15 + dy15*dy15);
+        const dx16 = hlms[0].x - bw16.x;
+        const dy16 = hlms[0].y - bw16.y;
+        const d16 = Math.sqrt(dx16*dx16 + dy16*dy16);
+        const closestPoseWrist = d15 < d16 ? bw15 : bw16;
+
+        ctx.strokeStyle = ownerColor;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(hlms[0].x * W, hlms[0].y * H);
+        ctx.lineTo(closestPoseWrist.x * W, closestPoseWrist.y * H);
+        ctx.stroke();
+      }
 
       ctx.strokeStyle = ownerColor;
       ctx.lineWidth = 2;
@@ -439,4 +497,4 @@ loadModels();
 </html>
 """
 
-components.html(LIVE_DETECTION_HTML, height=680, scrolling=False)
+components.html(LIVE_DETECTION_HTML, height=750, scrolling=False)
