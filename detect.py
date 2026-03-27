@@ -185,19 +185,22 @@ def main():
             tb['chest_bbox'] = chest_bbox
             tb['wrists'] = [left_wrist, right_wrist]
             
-            for connection in mp_pose_solutions.POSE_CONNECTIONS:
-                start_idx = connection[0]
-                end_idx = connection[1]
-                if landmarks[start_idx].presence > 0.5 and landmarks[end_idx].presence > 0.5:
-                    start_pt = (int(landmarks[start_idx].x * w), int(landmarks[start_idx].y * h))
-                    end_pt = (int(landmarks[end_idx].x * w), int(landmarks[end_idx].y * h))
-                    cv2.line(image, start_pt, end_pt, color, 2)
-            
-            fox, foy, fow, foh = int(face_bbox[0]*w), int(face_bbox[1]*h), int(face_bbox[2]*w), int(face_bbox[3]*h)
-            cv2.rectangle(image, (fox, foy), (fox+fow, foy+foh), color, 2)
-            cx, cy, cw_rect, ch_rect = int(chest_bbox[0]*w), int(chest_bbox[1]*h), int(chest_bbox[2]*w), int(chest_bbox[3]*h)
-            cv2.rectangle(image, (cx, cy), (cx+cw_rect, cy+ch_rect), color, 1, cv2.LINE_4)
-            cv2.putText(image, f"Subject {tb['id']}", (fox, foy-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            if tb['id'] == 'A':
+                for connection in mp_pose_solutions.POSE_CONNECTIONS:
+                    start_idx = connection[0]
+                    end_idx = connection[1]
+                    if landmarks[start_idx].presence > 0.5 and landmarks[end_idx].presence > 0.5:
+                        start_pt = (int(landmarks[start_idx].x * w), int(landmarks[start_idx].y * h))
+                        end_pt = (int(landmarks[end_idx].x * w), int(landmarks[end_idx].y * h))
+                        cv2.line(image, start_pt, end_pt, color, 2)
+                fox, foy, fow, foh = int(face_bbox[0]*w), int(face_bbox[1]*h), int(face_bbox[2]*w), int(face_bbox[3]*h)
+                cv2.putText(image, f"Subject {tb['id']}", (fox, foy-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            else:
+                fox, foy, fow, foh = int(face_bbox[0]*w), int(face_bbox[1]*h), int(face_bbox[2]*w), int(face_bbox[3]*h)
+                cv2.rectangle(image, (fox, foy), (fox+fow, foy+foh), color, 2)
+                cx, cy, cw_rect, ch_rect = int(chest_bbox[0]*w), int(chest_bbox[1]*h), int(chest_bbox[2]*w), int(chest_bbox[3]*h)
+                cv2.rectangle(image, (cx, cy), (cx+cw_rect, cy+ch_rect), color, 1, cv2.LINE_4)
+                cv2.putText(image, f"Subject {tb['id']}", (fox, foy-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
         alerts = [] 
         

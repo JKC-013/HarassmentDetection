@@ -271,16 +271,37 @@ function checkHarassment(poseResult, handResult) {
     if (tb.missingFrames > 0) continue;
     let lms = tb.lms;
     let fx = 0, fy = 0, fCount = 0;
+    let fMinX = 1, fMaxX = 0, fMinY = 1, fMaxY = 0;
     for (const ki of FACE_KPS) {
-      if (ki < lms.length) { fx += lms[ki].x; fy += lms[ki].y; fCount++; }
+      if (ki < lms.length) { 
+        fx += lms[ki].x; fy += lms[ki].y; fCount++; 
+        fMinX = Math.min(fMinX, lms[ki].x); fMaxX = Math.max(fMaxX, lms[ki].x);
+        fMinY = Math.min(fMinY, lms[ki].y); fMaxY = Math.max(fMaxY, lms[ki].y);
+      }
     }
     tb.faceCenter = fCount ? { x: fx/fCount, y: fy/fCount } : null;
+    let fw = fMaxX - fMinX, fh = fMaxY - fMinY;
+    if (fw < 0 || fh < 0) {
+      tb.faceBBox = null;
+    } else {
+      tb.faceBBox = { x: fMinX - fw/4, y: fMinY - fh/2, w: fw * 1.5, h: fh * 2.0 };
+    }
 
     let cx = 0, cy = 0, cCount = 0;
     for (const ki of CHEST_KPS) {
       if (ki < lms.length) { cx += lms[ki].x; cy += lms[ki].y; cCount++; }
     }
     tb.chestCenter = cCount ? { x: cx/cCount, y: cy/cCount - 0.05 } : null;
+    
+    if (lms.length > 24) {
+      let cMinX = Math.min(lms[11].x, lms[12].x, lms[23].x, lms[24].x);
+      let cMaxX = Math.max(lms[11].x, lms[12].x, lms[23].x, lms[24].x);
+      let cMinY = Math.min(lms[11].y, lms[12].y);
+      let cMaxY = Math.max(lms[23].y, lms[24].y);
+      tb.chestBBox = { x: cMinX, y: cMinY, w: cMaxX - cMinX, h: (cMaxY - cMinY) * 0.6 };
+    } else {
+      tb.chestBBox = null;
+    }
 
     tb.leftWrist = lms.length > 15 ? lms[15] : {x:0, y:0};
     tb.rightWrist = lms.length > 16 ? lms[16] : {x:0, y:0};
@@ -312,30 +333,53 @@ function draw(poseResult, handResult) {
     let color = tb.id === 'A' ? "#00e676" : "#ff6d00";
     let lms = tb.lms;
 
-    // Draw Skeleton
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 3;
-    for (const [s, e] of POSE_CONNECTIONS) {
-      if (s < lms.length && e < lms.length) {
-        ctx.beginPath();
-        ctx.moveTo(lms[s].x * W, lms[s].y * H);
-        ctx.lineTo(lms[e].x * W, lms[e].y * H);
-        ctx.stroke();
+    if (tb.id === 'A') {
+      // Draw Skeleton for A
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 3;
+      for (const [s, e] of POSE_CONNECTIONS) {
+        if (s < lms.length && e < lms.length) {
+          ctx.beginPath();
+          ctx.moveTo(lms[s].x * W, lms[s].y * H);
+          ctx.lineTo(lms[e].x * W, lms[e].y * H);
+          ctx.stroke();
+        }
       }
-    }
-    // Draw Joints
-    ctx.fillStyle = color;
-    for (const lm of lms) {
-      ctx.beginPath();
-      ctx.arc(lm.x * W, lm.y * H, 4, 0, Math.PI*2);
-      ctx.fill();
-    }
-
-    // Label Subject A or B
-    if (tb.faceCenter) {
+      // Draw Joints
       ctx.fillStyle = color;
-      ctx.font = "bold 20px 'Segoe UI', Arial";
-      ctx.fillText("Subject " + tb.id, tb.faceCenter.x * W - 40, tb.faceCenter.y * H - 60);
+      for (const lm of lms) {
+        ctx.beginPath();
+        ctx.arc(lm.x * W, lm.y * H, 4, 0, Math.PI*2);
+        ctx.fill();
+      }
+      
+      // Label Subject A
+      if (tb.faceCenter) {
+        ctx.fillStyle = color;
+        ctx.font = "bold 20px 'Segoe UI', Arial";
+        ctx.fillText("Subject A", tb.faceCenter.x * W - 40, tb.faceCenter.y * H - 60);
+      }
+    } else if (tb.id === 'B') {
+      // Draw boxes for B
+      if (tb.faceBBox) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(tb.faceBBox.x * W, tb.faceBBox.y * H, tb.faceBBox.w * W, tb.faceBBox.h * H);
+      }
+      if (tb.chestBBox) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        ctx.strokeRect(tb.chestBBox.x * W, tb.chestBBox.y * H, tb.chestBBox.w * W, tb.chestBBox.h * H);
+        ctx.setLineDash([]);
+      }
+      
+      // Label Subject B
+      if (tb.faceBBox) {
+        ctx.fillStyle = color;
+        ctx.font = "bold 20px 'Segoe UI', Arial";
+        ctx.fillText("Subject B", tb.faceBBox.x * W, tb.faceBBox.y * H - 10);
+      }
     }
   }
 
