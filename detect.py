@@ -113,7 +113,7 @@ def main():
     print("Multi-Person Face Touch Detection Started.")
     print("Press 'q' to quit.")
 
-    tracked_hands = []
+    tracked_bodies = []
 
     while cap.isOpened():
         success, image = cap.read()
@@ -127,130 +127,106 @@ def main():
         pose_result = pose_landmarker.detect(mp_image)
         hand_result = hands_detector.process(rgb_image)
 
-        bodies = [] 
-        
+        current_poses = []
         if pose_result.pose_landmarks:
-            for i, landmarks in enumerate(pose_result.pose_landmarks):
-                color = PERSON_COLORS[i % len(PERSON_COLORS)]
-                face_bbox = get_face_bbox_from_pose(landmarks)
-                chest_bbox = get_chest_bbox_from_pose(landmarks)
-                
-                left_wrist = (landmarks[15].x, landmarks[15].y)
-                right_wrist = (landmarks[16].x, landmarks[16].y)
-                
-                bodies.append({
-                    'id': i,
-                    'face_bbox': face_bbox,
-                    'chest_bbox': chest_bbox,
-                    'wrists': [left_wrist, right_wrist],
-                    'color': color
+            for lms in pose_result.pose_landmarks:
+                cx = sum([lm.x for lm in lms]) / len(lms)
+                cy = sum([lm.y for lm in lms]) / len(lms)
+                current_poses.append({
+                    'center': (cx, cy),
+                    'landmarks': lms,
+                    'matched': False
                 })
-                
-                # --- VISUALIZATION: POSE CONNECTIONS ---
-                # Draw lines between pose landmarks
-                for connection in mp_pose_solutions.POSE_CONNECTIONS:
-                    start_idx = connection[0]
-                    end_idx = connection[1]
-                    
-                    if landmarks[start_idx].presence > 0.5 and landmarks[end_idx].presence > 0.5:
-                        start_pt = (int(landmarks[start_idx].x * w), int(landmarks[start_idx].y * h))
-                        end_pt = (int(landmarks[end_idx].x * w), int(landmarks[end_idx].y * h))
-                        cv2.line(image, start_pt, end_pt, color, 2)
 
-                # Draw Face Bbox & Body ID
-                fox, foy, fow, foh = int(face_bbox[0]*w), int(face_bbox[1]*h), int(face_bbox[2]*w), int(face_bbox[3]*h)
-                cv2.rectangle(image, (fox, foy), (fox+fow, foy+foh), color, 2)
-                
-                # Draw Chest Bbox
-                cx, cy, cw_rect, ch_rect = int(chest_bbox[0]*w), int(chest_bbox[1]*h), int(chest_bbox[2]*w), int(chest_bbox[3]*h)
-                cv2.rectangle(image, (cx, cy), (cx+cw_rect, cy+ch_rect), color, 1, cv2.LINE_4)
+        for tb in tracked_bodies:
+            best_dist = 0.3
+            best_pose = None
+            for cp in current_poses:
+                if cp['matched']: continue
+                d = get_distance(tb['pose_center'], cp['center'])
+                if d < best_dist:
+                    best_dist = d
+                    best_pose = cp
+            if best_pose:
+                best_pose['matched'] = True
+                tb['pose_center'] = best_pose['center']
+                tb['landmarks'] = best_pose['landmarks']
+                tb['missing_frames'] = 0
+            else:
+                tb['missing_frames'] += 1
 
-                cv2.putText(image, f"P{i}", (fox, foy-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+        tracked_bodies = [tb for tb in tracked_bodies if tb['missing_frames'] < 10]
+
+        for cp in current_poses:
+            if not cp['matched']:
+                tb_id = 'A'
+                if any(tb['id'] == 'A' for tb in tracked_bodies):
+                    tb_id = 'B'
+                if any(tb['id'] == tb_id for tb in tracked_bodies):
+                    continue
+                tracked_bodies.append({
+                    'id': tb_id,
+                    'pose_center': cp['center'],
+                    'missing_frames': 0,
+                    'landmarks': cp['landmarks']
+                })
+
+        for tb in tracked_bodies:
+            if tb['missing_frames'] > 0: continue
+            landmarks = tb['landmarks']
+            
+            color = (0, 200, 0) if tb['id'] == 'A' else (0, 100, 255) # Green for A, Orange for B
+
+            face_bbox = get_face_bbox_from_pose(landmarks)
+            chest_bbox = get_chest_bbox_from_pose(landmarks)
+            left_wrist = (landmarks[15].x, landmarks[15].y)
+            right_wrist = (landmarks[16].x, landmarks[16].y)
+            tb['face_bbox'] = face_bbox
+            tb['chest_bbox'] = chest_bbox
+            tb['wrists'] = [left_wrist, right_wrist]
+            
+            for connection in mp_pose_solutions.POSE_CONNECTIONS:
+                start_idx = connection[0]
+                end_idx = connection[1]
+                if landmarks[start_idx].presence > 0.5 and landmarks[end_idx].presence > 0.5:
+                    start_pt = (int(landmarks[start_idx].x * w), int(landmarks[start_idx].y * h))
+                    end_pt = (int(landmarks[end_idx].x * w), int(landmarks[end_idx].y * h))
+                    cv2.line(image, start_pt, end_pt, color, 2)
+            
+            fox, foy, fow, foh = int(face_bbox[0]*w), int(face_bbox[1]*h), int(face_bbox[2]*w), int(face_bbox[3]*h)
+            cv2.rectangle(image, (fox, foy), (fox+fow, foy+foh), color, 2)
+            cx, cy, cw_rect, ch_rect = int(chest_bbox[0]*w), int(chest_bbox[1]*h), int(chest_bbox[2]*w), int(chest_bbox[3]*h)
+            cv2.rectangle(image, (cx, cy), (cx+cw_rect, cy+ch_rect), color, 1, cv2.LINE_4)
+            cv2.putText(image, f"Subject {tb['id']}", (fox, foy-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
         alerts = [] 
         
-        current_hands = []
-        if hand_result.multi_hand_landmarks:
-            for i, hand_landmarks in enumerate(hand_result.multi_hand_landmarks):
-                current_hands.append({
-                    'id': i,
-                    'wrist': (hand_landmarks.landmark[0].x, hand_landmarks.landmark[0].y),
-                    'landmarks': hand_landmarks.landmark,
-                    'matched': False,
-                    'owner_id': -1
-                })
-                
-        # Match tracked hands
-        for th in tracked_hands:
-            best_dist = 0.2
-            best_hand = None
-            for ch in current_hands:
-                if ch['matched']: continue
-                d = get_distance(th['wrist'], ch['wrist'])
-                if d < best_dist:
-                    best_dist = d
-                    best_hand = ch
-            if best_hand:
-                best_hand['matched'] = True
-                best_hand['owner_id'] = th['owner_id']
-                th['wrist'] = best_hand['wrist']
-                th['updated'] = True
-            else:
-                th['updated'] = False
-                
-        # Filter tracked hands
-        tracked_hands = [th for th in tracked_hands if th['updated']]
-        
-        # Assign new hands
-        for ch in current_hands:
-            if not ch['matched']:
-                min_dist = 100.0
-                owner_id = -1
-                for body in bodies:
-                    for body_wrist in body['wrists']:
-                        d = get_distance(ch['wrist'], body_wrist)
-                        if d < min_dist:
-                            min_dist = d
-                            owner_id = body['id']
-                if min_dist > 0.2:
-                    owner_id = -1
-                ch['owner_id'] = owner_id
-                tracked_hands.append({'wrist': ch['wrist'], 'owner_id': owner_id, 'updated': True})
+        subject_a = next((tb for tb in tracked_bodies if tb['id'] == 'A' and tb['missing_frames'] == 0), None)
+        subject_b = next((tb for tb in tracked_bodies if tb['id'] == 'B' and tb['missing_frames'] == 0), None)
 
-        for ch in current_hands:
-            owner_id = ch['owner_id']
-            color = (128, 128, 128)
-            owner_body = None
-            for b in bodies:
-                if b['id'] == owner_id:
-                    color = b['color']
-                    owner_body = b
-                    break
-                    
-            for lm in ch['landmarks']:
-                lx, ly = int(lm.x * w), int(lm.y * h)
-                cv2.circle(image, (lx, ly), 4, color, -1)
+        if hand_result.multi_hand_landmarks:
+            for hand_landmarks in hand_result.multi_hand_landmarks:
+                hand_wrist_normalized = (hand_landmarks.landmark[0].x, hand_landmarks.landmark[0].y)
+                color = (0, 200, 0) # Subject A's color
                 
-            if owner_body:
-                bw15 = owner_body['wrists'][0]
-                bw16 = owner_body['wrists'][1]
-                w_pt = ch['wrist']
-                d15 = get_distance(w_pt, bw15)
-                d16 = get_distance(w_pt, bw16)
-                closest_w = bw15 if d15 < d16 else bw16
-                cv2.line(image, (int(w_pt[0]*w), int(w_pt[1]*h)), (int(closest_w[0]*w), int(closest_w[1]*h)), color, 2)
+                if subject_a:
+                    bw15 = subject_a['wrists'][0]
+                    bw16 = subject_a['wrists'][1]
+                    d15 = get_distance(hand_wrist_normalized, bw15)
+                    d16 = get_distance(hand_wrist_normalized, bw16)
+                    closest_w = bw15 if d15 < d16 else bw16
+                    cv2.line(image, (int(hand_wrist_normalized[0]*w), int(hand_wrist_normalized[1]*h)), (int(closest_w[0]*w), int(closest_w[1]*h)), color, 2)
+
+                for lm in hand_landmarks.landmark:
+                    lx, ly = int(lm.x * w), int(lm.y * h)
+                    cv2.circle(image, (lx, ly), 4, color, -1)
                 
-            if owner_id != -1:
-                for landmark in ch['landmarks']:
-                    pt = (landmark.x, landmark.y)
-                    for other_body in bodies:
-                        if owner_id != other_body['id']:
-                            if is_point_in_rect(pt, other_body['face_bbox']):
-                                alerts.append((other_body['id'], owner_id, "Face"))
-                                break
-                            if is_point_in_rect(pt, other_body['chest_bbox']):
-                                alerts.append((other_body['id'], owner_id, "Chest"))
-                                break
+                if subject_b:
+                    pt = hand_wrist_normalized
+                    if is_point_in_rect(pt, subject_b['face_bbox']):
+                        alerts.append(("A", "B", "Face"))
+                    elif is_point_in_rect(pt, subject_b['chest_bbox']):
+                        alerts.append(("A", "B", "Chest"))
 
         if alerts:
             # unique_alerts = set(alerts)

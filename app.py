@@ -159,7 +159,7 @@ let animFrame      = null;
 let streaming      = false;
 let lastFrameTime  = -1;
 let fpsArr         = [];
-let trackedHands   = [];
+let trackedBodies  = [];
 
 // ── Load models ──────────────────────────────────────────────────────────────
 async function loadModels() {
@@ -232,157 +232,124 @@ function getDistance(p1, p2) {
 }
 
 function checkHarassment(poseResult, handResult) {
-  if (!poseResult || poseResult.landmarks.length < 2) return false;
-  
-  if (!handResult || handResult.landmarks.length === 0) {
-    trackedHands = [];
-    return false;
+  const currentPoses = (poseResult && poseResult.landmarks) ? poseResult.landmarks.map(lms => {
+    let cx = 0, cy = 0;
+    for (let lm of lms) { cx += lm.x; cy += lm.y; }
+    return { center: { x: cx/lms.length, y: cy/lms.length }, lms: lms, matched: false };
+  }) : [];
+
+  for (let tb of trackedBodies) {
+    let bestDist = 0.3;
+    let bestPose = null;
+    for (let cp of currentPoses) {
+      if (cp.matched) continue;
+      let d = getDistance(tb.poseCenter, cp.center);
+      if (d < bestDist) { bestDist = d; bestPose = cp; }
+    }
+    if (bestPose) {
+      bestPose.matched = true;
+      tb.poseCenter = bestPose.center;
+      tb.lms = bestPose.lms;
+      tb.missingFrames = 0;
+    } else {
+      tb.missingFrames++;
+    }
   }
 
-  // Build bounding regions per person
-  const bodies = poseResult.landmarks.map(lms => {
+  trackedBodies = trackedBodies.filter(tb => tb.missingFrames < 10);
+
+  for (let cp of currentPoses) {
+    if (!cp.matched) {
+      let id = 'A';
+      if (trackedBodies.some(tb => tb.id === 'A')) id = 'B';
+      if (trackedBodies.some(tb => tb.id === id)) continue; // Only track A and B
+      trackedBodies.push({ id: id, poseCenter: cp.center, missingFrames: 0, lms: cp.lms });
+    }
+  }
+
+  for (let tb of trackedBodies) {
+    if (tb.missingFrames > 0) continue;
+    let lms = tb.lms;
     let fx = 0, fy = 0, fCount = 0;
     for (const ki of FACE_KPS) {
       if (ki < lms.length) { fx += lms[ki].x; fy += lms[ki].y; fCount++; }
     }
-    const faceCenter = fCount ? { x: fx/fCount, y: fy/fCount } : null;
+    tb.faceCenter = fCount ? { x: fx/fCount, y: fy/fCount } : null;
 
     let cx = 0, cy = 0, cCount = 0;
     for (const ki of CHEST_KPS) {
       if (ki < lms.length) { cx += lms[ki].x; cy += lms[ki].y; cCount++; }
     }
-    const chestCenter = cCount ? { x: cx/cCount, y: cy/cCount - 0.05 } : null;
+    tb.chestCenter = cCount ? { x: cx/cCount, y: cy/cCount - 0.05 } : null;
 
-    const leftWrist = lms.length > 15 ? lms[15] : {x:0, y:0};
-    const rightWrist = lms.length > 16 ? lms[16] : {x:0, y:0};
-
-    return { faceCenter, chestCenter, wrists: [leftWrist, rightWrist] };
-  });
-
-  let currentHands = [];
-  for (let hi = 0; hi < handResult.landmarks.length; hi++) {
-    currentHands.push({ hi: hi, wrist: handResult.landmarks[hi][0], matched: false, lms: handResult.landmarks[hi] });
-  }
-
-  // Match existing tracked hands
-  for (let th of trackedHands) {
-    let bestDist = 0.2; // max distance for frame-to-frame tracking
-    let bestHand = null;
-    for (let ch of currentHands) {
-      if (ch.matched) continue;
-      let d = getDistance(th.wrist, ch.wrist);
-      if (d < bestDist) {
-        bestDist = d;
-        bestHand = ch;
-      }
-    }
-    if (bestHand) {
-      bestHand.matched = true;
-      th.wrist = bestHand.wrist;
-      th.updated = true;
-      bestHand.lms.ownerIdx = th.ownerIdx;
-    } else {
-      th.updated = false;
-    }
-  }
-
-  // Filter out hands that disappeared
-  trackedHands = trackedHands.filter(th => th.updated);
-
-  // Assign owners to new hands
-  for (let ch of currentHands) {
-    if (!ch.matched) {
-      let minDist = 100.0;
-      let ownerIdx = -1;
-      for (let pi = 0; pi < bodies.length; pi++) {
-        for (const bw of bodies[pi].wrists) {
-          const d = getDistance(ch.wrist, bw);
-          if (d < minDist) { minDist = d; ownerIdx = pi; }
-        }
-      }
-      if (minDist > 0.6) ownerIdx = -1;
-
-      ch.lms.ownerIdx = ownerIdx;
-      trackedHands.push({ wrist: ch.wrist, ownerIdx: ownerIdx, updated: true });
-    }
+    tb.leftWrist = lms.length > 15 ? lms[15] : {x:0, y:0};
+    tb.rightWrist = lms.length > 16 ? lms[16] : {x:0, y:0};
   }
 
   let harassementDetected = false;
+  let subjectB = trackedBodies.find(tb => tb.id === 'B' && tb.missingFrames === 0);
 
-  for (let ch of currentHands) {
-    const ownerIdx = ch.lms.ownerIdx;
-    if (ownerIdx !== -1) {
-      for (let pi = 0; pi < bodies.length; pi++) {
-        if (ownerIdx === pi) continue;
-        const b = bodies[pi];
-        if (b.faceCenter && getDistance(ch.wrist, b.faceCenter) < ALERT_DIST) harassementDetected = true;
-        if (b.chestCenter && getDistance(ch.wrist, b.chestCenter) < ALERT_DIST + 0.04) harassementDetected = true;
-      }
+  if (handResult && handResult.landmarks.length > 0 && subjectB) {
+    for (let hlms of handResult.landmarks) {
+      const wrist = hlms[0];
+      if (subjectB.faceCenter && getDistance(wrist, subjectB.faceCenter) < ALERT_DIST) harassementDetected = true;
+      if (subjectB.chestCenter && getDistance(wrist, subjectB.chestCenter) < ALERT_DIST + 0.04) harassementDetected = true;
     }
   }
+
   return harassementDetected;
 }
 
 // ── Draw ─────────────────────────────────────────────────────────────────────
 function draw(poseResult, handResult) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const W = canvas.width, H = canvas.height;
 
-  let bodiesWrists = [];
+  // Draw skeletons
+  for (let tb of trackedBodies) {
+    if (tb.missingFrames > 0) continue;
+    
+    let color = tb.id === 'A' ? "#00e676" : "#ff6d00";
+    let lms = tb.lms;
 
-  // Draw pose skeletons
-  if (poseResult && poseResult.landmarks) {
-    poseResult.landmarks.forEach((lms, pi) => {
-      const color = PERSON_COLORS[pi % PERSON_COLORS.length];
-      const W = canvas.width, H = canvas.height;
-
-      const leftWrist = lms.length > 15 ? lms[15] : {x:0, y:0};
-      const rightWrist = lms.length > 16 ? lms[16] : {x:0, y:0};
-      bodiesWrists.push({ id: pi, color: color, wrists: [leftWrist, rightWrist] });
-
-      // Connections
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 3;
-      for (const [s, e] of POSE_CONNECTIONS) {
-        if (s < lms.length && e < lms.length) {
-          ctx.beginPath();
-          ctx.moveTo(lms[s].x * W, lms[s].y * H);
-          ctx.lineTo(lms[e].x * W, lms[e].y * H);
-          ctx.stroke();
-        }
-      }
-      // Joints
-      ctx.fillStyle = color;
-      for (const lm of lms) {
+    // Draw Skeleton
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3;
+    for (const [s, e] of POSE_CONNECTIONS) {
+      if (s < lms.length && e < lms.length) {
         ctx.beginPath();
-        ctx.arc(lm.x * W, lm.y * H, 4, 0, Math.PI*2);
-        ctx.fill();
+        ctx.moveTo(lms[s].x * W, lms[s].y * H);
+        ctx.lineTo(lms[e].x * W, lms[e].y * H);
+        ctx.stroke();
       }
-    });
+    }
+    // Draw Joints
+    ctx.fillStyle = color;
+    for (const lm of lms) {
+      ctx.beginPath();
+      ctx.arc(lm.x * W, lm.y * H, 4, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    // Label Subject A or B
+    if (tb.faceCenter) {
+      ctx.fillStyle = color;
+      ctx.font = "bold 20px 'Segoe UI', Arial";
+      ctx.fillText("Subject " + tb.id, tb.faceCenter.x * W - 40, tb.faceCenter.y * H - 60);
+    }
   }
+
+  const subjectA = trackedBodies.find(tb => tb.id === 'A' && tb.missingFrames === 0);
 
   // Draw hands
   if (handResult && handResult.landmarks) {
     handResult.landmarks.forEach(hlms => {
-      const W = canvas.width, H = canvas.height;
+      let color = "#00e676"; // Subject A color
       
-      let ownerColor = "#ffffff";
-      const ownerId = hlms.ownerIdx;
-      let ownerPose = null;
-      
-      if (ownerId !== undefined && ownerId !== -1) {
-        const bodyObj = bodiesWrists.find(b => b.id === ownerId);
-        if (bodyObj) {
-          ownerColor = bodyObj.color;
-        }
-        if (poseResult && poseResult.landmarks && poseResult.landmarks[ownerId]) {
-          ownerPose = poseResult.landmarks[ownerId];
-        }
-      }
-
-      // connect hand wrist to closest pose wrist
-      if (ownerPose) {
-        const bw15 = ownerPose.length > 15 ? ownerPose[15] : {x:0, y:0};
-        const bw16 = ownerPose.length > 16 ? ownerPose[16] : {x:0, y:0};
+      // connect to Subject A
+      if (subjectA) {
+        const bw15 = subjectA.leftWrist;
+        const bw16 = subjectA.rightWrist;
         const dx15 = hlms[0].x - bw15.x;
         const dy15 = hlms[0].y - bw15.y;
         const d15 = Math.sqrt(dx15*dx15 + dy15*dy15);
@@ -391,7 +358,7 @@ function draw(poseResult, handResult) {
         const d16 = Math.sqrt(dx16*dx16 + dy16*dy16);
         const closestPoseWrist = d15 < d16 ? bw15 : bw16;
 
-        ctx.strokeStyle = ownerColor;
+        ctx.strokeStyle = color;
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(hlms[0].x * W, hlms[0].y * H);
@@ -399,7 +366,7 @@ function draw(poseResult, handResult) {
         ctx.stroke();
       }
 
-      ctx.strokeStyle = ownerColor;
+      ctx.strokeStyle = color;
       ctx.lineWidth = 2;
       for (const [s, e] of HAND_CONNECTIONS) {
         if (s < hlms.length && e < hlms.length) {
@@ -409,7 +376,7 @@ function draw(poseResult, handResult) {
           ctx.stroke();
         }
       }
-      ctx.fillStyle = ownerColor;
+      ctx.fillStyle = color;
       for (const lm of hlms) {
         ctx.beginPath();
         ctx.arc(lm.x * W, lm.y * H, 3, 0, Math.PI*2);
